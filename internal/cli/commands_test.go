@@ -1004,3 +1004,79 @@ func TestActivityListAll(t *testing.T) {
 		t.Errorf("expected rows from both pages, stdout=%q", res.stdout)
 	}
 }
+
+func TestSearch(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/search", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("search", "login")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "#   TITLE       STATUS  BOARD    LAST_ACTIVE\n7   Fix login   open    Bugs     2024-05-06\n12  Add search  closed  Roadmap  2024-05-07\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "GET", "/acme/search")
+	if rec.RawQuery != "q=login" {
+		t.Errorf("query = %q", rec.RawQuery)
+	}
+}
+
+func TestSearchRequiresQuery(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("search")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestSearchAll(t *testing.T) {
+	h := newHarness(t)
+	page1 := `[{"number":7,"title":"Fix login","status":"open","board":{"name":"Bugs"},"last_active_at":"2024-05-06"}]`
+	page2 := `[{"number":12,"title":"Add search","status":"closed","board":{"name":"Roadmap"},"last_active_at":"2024-05-07"}]`
+	h.route("GET", "/acme/search", stub{Status: 200, Body: page1, Headers: map[string]string{
+		"Link": `<` + h.server.URL + `/acme/search/page2>; rel="next"`,
+	}})
+	h.route("GET", "/acme/search/page2", stub{Status: 200, Body: page2})
+
+	res := h.run("search", "x", "--all")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 2 {
+		t.Fatalf("expected 2 requests, got %d", h.requestCount())
+	}
+	if !strings.Contains(res.stdout, "Fix login") || !strings.Contains(res.stdout, "Add search") {
+		t.Errorf("expected rows from both pages, stdout=%q", res.stdout)
+	}
+}
+
+// The query may sit before --all, and a lone --all is not the query.
+func TestSearchFlagBeforeQuery(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/search", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("search", "--all", "login")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if rec := h.lastRequest(); rec.RawQuery != "q=login" {
+		t.Errorf("query = %q, want q=login", rec.RawQuery)
+	}
+}
+
+func TestSearchAllWithoutQuery(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("search", "--all")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}

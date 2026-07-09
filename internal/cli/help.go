@@ -109,10 +109,20 @@ func helpForCard() string {
   fizzy-cli card untriage <card-number>
   fizzy-cli card tag <card-number> --title <tag-title>
   fizzy-cli card assign <card-number> --assignee-id <user-id>
+  fizzy-cli card assign <card-number> --me
   fizzy-cli card watch <card-number>
   fizzy-cli card unwatch <card-number>
   fizzy-cli card pin <card-number>
   fizzy-cli card unpin <card-number>
+  fizzy-cli card move <card-number> --board-id <board-id>
+  fizzy-cli card golden <card-number>
+  fizzy-cli card ungolden <card-number>
+  fizzy-cli card remove-image <card-number>
+  fizzy-cli card read <card-number>
+  fizzy-cli card unread <card-number>
+
+NOTES:
+  --me and --assignee-id are mutually exclusive on 'card assign'.
 
 FILTERS:
   --board-id ID           repeatable

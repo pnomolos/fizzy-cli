@@ -775,6 +775,137 @@ func TestReactionRemoveOnComment(t *testing.T) {
 	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/comments/c1/reactions/r9")
 }
 
+func TestCardMove(t *testing.T) {
+	h := newHarness(t)
+	body := `{"id":"cardid","number":7,"title":"Fix login","status":"open","board":{"name":"New Board"},"creator":{"name":"Ada"}}`
+	h.route("PUT", "/acme/cards/7/board", stub{Status: 200, Body: body})
+
+	res := h.run("card", "move", "7", "--board-id", "b9")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Board: New Board") {
+		t.Errorf("stdout = %q, want it to show the new board", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/cards/7/board")
+	assertJSONBody(t, rec, map[string]any{"board_id": "b9"})
+}
+
+func TestCardMoveRequiresBoardID(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("card", "move", "7")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestCardGoldenUngolden(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/goldness", stub{Status: 204})
+	h.route("DELETE", "/acme/cards/7/goldness", stub{Status: 204})
+
+	res := h.run("card", "golden", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card marked golden.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/cards/7/goldness")
+
+	res = h.run("card", "ungolden", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card unmarked golden.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/goldness")
+}
+
+func TestCardRemoveImage(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/acme/cards/7/image", stub{Status: 204})
+
+	res := h.run("card", "remove-image", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card image removed.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/image")
+}
+
+func TestCardReadUnread(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/reading", stub{Status: 201})
+	h.route("DELETE", "/acme/cards/7/reading", stub{Status: 204})
+
+	res := h.run("card", "read", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card marked read.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/cards/7/reading")
+
+	res = h.run("card", "unread", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card marked unread.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/reading")
+}
+
+func TestCardAssignMe(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/self_assignment", stub{Status: 204})
+
+	res := h.run("card", "assign", "7", "--me")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Self-assignment toggled.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/cards/7/self_assignment")
+}
+
+func TestCardAssignMeAndAssigneeIDMutuallyExclusive(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("card", "assign", "7", "--me", "--assignee-id", "u1")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "cannot be used together") {
+		t.Errorf("stderr = %q, want mutual-exclusion error", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestCardAssignAssigneeIDStillWorks(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/assignments", stub{Status: 204})
+
+	res := h.run("card", "assign", "7", "--assignee-id", "u1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "POST", "/acme/cards/7/assignments")
+	assertJSONBody(t, rec, map[string]any{"assignee_id": "u1"})
+}
+
 func TestPinList(t *testing.T) {
 	h := newHarness(t)
 	h.route("GET", "/acme/my/pins", stub{Status: 200, Body: cardsFixture})

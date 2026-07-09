@@ -231,6 +231,10 @@ func helpForUser() string {
   fizzy-cli user get <user-id>
   fizzy-cli user update <user-id> [--name <name>] [--avatar PATH]
   fizzy-cli user deactivate <user-id>
+  fizzy-cli user set-timezone <IANA-timezone>
+
+NOTES:
+  'set-timezone' updates the current user's timezone (e.g. America/New_York).
 `
 }
 
@@ -240,6 +244,8 @@ func helpForNotification() string {
   fizzy-cli notification read <notification-id>
   fizzy-cli notification unread <notification-id>
   fizzy-cli notification read-all
+  fizzy-cli notification settings
+  fizzy-cli notification settings set --email-frequency never|every_few_hours|daily|weekly
 `
 }
 

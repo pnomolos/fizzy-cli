@@ -16,6 +16,7 @@ var (
 	notificationListHeaders = []string{"ID", "READ", "TITLE", "CARD", "CREATED"}
 	accessTokenListHeaders  = []string{"ID", "DESCRIPTION", "PERMISSION", "CREATED"}
 	stepListHeaders         = []string{"ID", "DONE", "CONTENT"}
+	reactionListHeaders     = []string{"ID", "CONTENT", "REACTER"}
 )
 
 type board struct {
@@ -128,6 +129,13 @@ type accessToken struct {
 type accessTokenCreated struct {
 	accessToken
 	Token string `json:"token"`
+}
+
+type reaction struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	Reacter user   `json:"reacter"`
+	URL     string `json:"url"`
 }
 
 type identity struct {
@@ -256,6 +264,18 @@ func stepListRows(body []byte) ([][]string, error) {
 			done = "✓"
 		}
 		rows = append(rows, []string{s.ID, done, s.Content})
+	}
+	return rows, nil
+}
+
+func reactionListRows(body []byte) ([][]string, error) {
+	var reactions []reaction
+	if err := json.Unmarshal(body, &reactions); err != nil {
+		return nil, err
+	}
+	rows := make([][]string, 0, len(reactions))
+	for _, r := range reactions {
+		rows = append(rows, []string{r.ID, r.Content, r.Reacter.Name})
 	}
 	return rows, nil
 }

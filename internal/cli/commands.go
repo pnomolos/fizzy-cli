@@ -8,12 +8,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"fizzy-cli/internal/api"
 	"fizzy-cli/internal/config"
@@ -1963,6 +1965,209 @@ func webhookDeliveries(ctx Context, path string, all bool) int {
 	}
 	printTable(ctx.Stdout, headers, rows, ctx.Output.Plain)
 	return 0
+}
+
+// exportPollInterval is the delay between status polls for `export create
+// --wait`. It is a package var so tests can shrink it.
+var exportPollInterval = 2 * time.Second
+
+// exportValueFlags are the value-taking flags on export subcommands, used by
+// reorderFlagArgs so a positional export id may appear before flags.
+var exportValueFlags = map[string]bool{
+	"user":    true,
+	"timeout": true,
+	"o":       true,
+}
+
+// exportCollectionPath returns the collection endpoint for account exports, or
+// per-user data exports when user is set.
+func exportCollectionPath(ctx Context, user string) string {
+	if user != "" {
+		return withAccount(ctx, "/users/"+user+"/data_exports")
+	}
+	return withAccount(ctx, "/account/exports")
+}
+
+func runExport(ctx Context, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(ctx.Stderr, helpForExport())
+		return 2
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForExport(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForExport(), err)
+	}
+	switch args[0] {
+	case "create":
+		fs := flag.NewFlagSet("export create", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		user := fs.String("user", "", "User ID (per-user data export)")
+		wait := fs.Bool("wait", false, "Poll until the export completes or fails")
+		timeout := fs.String("timeout", "5m", "Max time to wait when --wait is set")
+		if err := fs.Parse(reorderFlagArgs(args[1:], exportValueFlags)); err != nil {
+			return ctx.usageError(helpForExport(), err)
+		}
+		// Validate --timeout up front so a bad value doesn't leave an orphan
+		// export job behind on the server.
+		var dur time.Duration
+		if *wait {
+			d, err := time.ParseDuration(strings.TrimSpace(*timeout))
+			if err != nil {
+				return ctx.handleErr(helpForExport(), UsageError{Msg: fmt.Sprintf("invalid --timeout %q: %v", *timeout, err)})
+			}
+			dur = d
+		}
+		collection := exportCollectionPath(ctx, strings.TrimSpace(*user))
+		resp, err := ctx.Client.Do(requestContext(), "POST", collection, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForExport(), err)
+		}
+		if !*wait {
+			return outputJSONOrPretty(ctx, resp.Body, formatExport)
+		}
+		var created exportJob
+		if err := json.Unmarshal(resp.Body, &created); err != nil {
+			return ctx.handleErr(helpForExport(), err)
+		}
+		itemPath := collection + "/" + created.ID
+		body, err := ctx.waitForExport(itemPath, dur)
+		if err != nil {
+			return ctx.handleErr(helpForExport(), err)
+		}
+		return outputJSONOrPretty(ctx, body, formatExport)
+	case "get":
+		id, user, code, ok := exportIDAndUser(ctx, args[1:])
+		if !ok {
+			return code
+		}
+		path := exportCollectionPath(ctx, user) + "/" + id
+		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForExport(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatExport)
+	case "download":
+		return runExportDownload(ctx, args[1:])
+	default:
+		fmt.Fprint(ctx.Stderr, helpForExport())
+		return 2
+	}
+}
+
+// exportIDAndUser parses the positional export id plus the optional --user flag
+// shared by `export get` and `export download`.
+func exportIDAndUser(ctx Context, args []string) (id, user string, code int, ok bool) {
+	fs := flag.NewFlagSet("export", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	userFlag := fs.String("user", "", "User ID (per-user data export)")
+	if err := fs.Parse(reorderFlagArgs(args, exportValueFlags)); err != nil {
+		return "", "", ctx.usageError(helpForExport(), err), false
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return "", "", ctx.handleErr(helpForExport(), UsageError{Msg: "export id is required"}), false
+	}
+	return rest[0], strings.TrimSpace(*userFlag), 0, true
+}
+
+func runExportDownload(ctx Context, args []string) int {
+	fs := flag.NewFlagSet("export download", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	user := fs.String("user", "", "User ID (per-user data export)")
+	out := fs.String("o", "", "Output file path")
+	if err := fs.Parse(reorderFlagArgs(args, exportValueFlags)); err != nil {
+		return ctx.usageError(helpForExport(), err)
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return ctx.handleErr(helpForExport(), UsageError{Msg: "export id is required"})
+	}
+	id := rest[0]
+	itemPath := exportCollectionPath(ctx, strings.TrimSpace(*user)) + "/" + id
+	resp, err := ctx.Client.Do(requestContext(), "GET", itemPath, nil, nil, "", nil)
+	if err != nil {
+		return ctx.handleErr(helpForExport(), err)
+	}
+	var e exportJob
+	if err := json.Unmarshal(resp.Body, &e); err != nil {
+		return ctx.handleErr(helpForExport(), err)
+	}
+	if e.Status != "completed" {
+		return ctx.handleErr(helpForExport(), UsageError{Msg: fmt.Sprintf("export %s is not ready to download (status: %s)", id, e.Status)})
+	}
+	if strings.TrimSpace(e.DownloadURL) == "" {
+		return ctx.handleErr(helpForExport(), errors.New("completed export has no download_url"))
+	}
+	dl, err := ctx.Client.GetStream(requestContext(), e.DownloadURL)
+	if err != nil {
+		return ctx.handleErr(helpForExport(), err)
+	}
+	defer dl.Body.Close()
+
+	target := strings.TrimSpace(*out)
+	if target == "" {
+		target = exportDownloadFilename(dl.Header.Get("Content-Disposition"), id)
+	}
+	file, err := os.Create(target)
+	if err != nil {
+		return ctx.handleErr(helpForExport(), err)
+	}
+	written, err := io.Copy(file, dl.Body)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return ctx.handleErr(helpForExport(), err)
+	}
+	if ctx.Output.JSON {
+		if err := printJSON(ctx.Stdout, map[string]any{"path": target, "bytes": written}); err != nil {
+			return ctx.handleErr(helpForExport(), err)
+		}
+		return 0
+	}
+	fmt.Fprintf(ctx.Stdout, "Saved %d bytes to %s\n", written, target)
+	return 0
+}
+
+// exportDownloadFilename derives the output filename from the response
+// Content-Disposition header, falling back to export-<id>.zip.
+func exportDownloadFilename(contentDisposition, id string) string {
+	if contentDisposition != "" {
+		if _, params, err := mime.ParseMediaType(contentDisposition); err == nil {
+			if name := strings.TrimSpace(params["filename"]); name != "" {
+				return filepath.Base(name)
+			}
+		}
+	}
+	return "export-" + id + ".zip"
+}
+
+// waitForExport polls an export until it reports completed/failed or the
+// timeout elapses, returning the last response body seen.
+func (ctx Context) waitForExport(itemPath string, timeout time.Duration) ([]byte, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		resp, err := ctx.Client.Do(requestContext(), "GET", itemPath, nil, nil, "", nil)
+		if err != nil {
+			return nil, err
+		}
+		var e exportJob
+		if err := json.Unmarshal(resp.Body, &e); err != nil {
+			return nil, err
+		}
+		if e.Status == "completed" {
+			return resp.Body, nil
+		}
+		if e.Status == "failed" {
+			return resp.Body, fmt.Errorf("export %s failed", e.ID)
+		}
+		if !time.Now().Before(deadline) {
+			return resp.Body, fmt.Errorf("timed out waiting for export %s (last status: %s)", e.ID, e.Status)
+		}
+		time.Sleep(exportPollInterval)
+	}
 }
 
 func listWithPagination(ctx Context, help string, path string, query url.Values, all bool, headers []string, rowFn func([]byte) ([][]string, error)) int {

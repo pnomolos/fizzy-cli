@@ -110,6 +110,41 @@ func (c *Client) Do(ctx context.Context, method, path string, query url.Values, 
 	}, nil
 }
 
+// GetStream issues an authenticated GET and returns the live response with its
+// body still open for streaming (the caller must Close it). Redirects are
+// followed by the underlying client, which preserves the Authorization header
+// on same-host hops. path may be an absolute URL (e.g. a download_url). On a
+// >=400 status it drains the body and returns an *APIError.
+func (c *Client) GetStream(ctx context.Context, path string) (*http.Response, error) {
+	urlStr, err := buildURL(c.BaseURL, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "*/*")
+	if c.Agent != "" {
+		req.Header.Set("User-Agent", c.Agent)
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	} else if c.SessionToken != "" {
+		req.Header.Set("Cookie", "session_token="+c.SessionToken)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, &APIError{Status: resp.StatusCode, Body: body}
+	}
+	return resp, nil
+}
+
 func buildURL(baseURL, path string, query url.Values) (string, error) {
 	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
 		u, err := url.Parse(path)

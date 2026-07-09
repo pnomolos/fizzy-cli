@@ -73,9 +73,18 @@ func helpForAccount() string {
 	return `USAGE:
   fizzy-cli account list
   fizzy-cli account set <account-slug>
+  fizzy-cli account get
+  fizzy-cli account update --name TEXT
+  fizzy-cli account auto-postpone <days>
+  fizzy-cli account join-code [get]
+  fizzy-cli account join-code set-limit <n>
+  fizzy-cli account join-code reset
 
 NOTES:
   Account slugs can be provided with or without a leading slash.
+  'auto-postpone' sets the account-wide default (persists, unlike a
+  board's auto-postpone setting); valid values are 3, 7, 11, 30, 90, 365.
+  'join-code' subcommands require admin privileges to modify.
 `
 }
 

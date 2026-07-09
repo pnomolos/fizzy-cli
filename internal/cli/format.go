@@ -140,6 +140,22 @@ type reaction struct {
 	URL     string `json:"url"`
 }
 
+type accountSettings struct {
+	ID                       string `json:"id"`
+	Name                     string `json:"name"`
+	CardsCount               int    `json:"cards_count"`
+	CreatedAt                string `json:"created_at"`
+	AutoPostponePeriodInDays int    `json:"auto_postpone_period_in_days"`
+}
+
+type joinCode struct {
+	Code       string `json:"code"`
+	UsageCount int    `json:"usage_count"`
+	UsageLimit int    `json:"usage_limit"`
+	URL        string `json:"url"`
+	Active     bool   `json:"active"`
+}
+
 type identity struct {
 	Accounts []struct {
 		Name string `json:"name"`
@@ -415,6 +431,28 @@ func formatColumn(body []byte) (string, error) {
 	return fmt.Sprintf(
 		"ID: %s\nName: %s\nColor: %s\nCreated: %s",
 		c.ID, c.Name, c.Color.Name, c.CreatedAt,
+	), nil
+}
+
+func formatAccountSettings(body []byte) (string, error) {
+	var a accountSettings
+	if err := json.Unmarshal(body, &a); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"ID: %s\nName: %s\nCards: %d\nCreated: %s\nAuto-postpone (days): %d",
+		a.ID, a.Name, a.CardsCount, a.CreatedAt, a.AutoPostponePeriodInDays,
+	), nil
+}
+
+func formatJoinCode(body []byte) (string, error) {
+	var j joinCode
+	if err := json.Unmarshal(body, &j); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"Code: %s\nURL: %s\nActive: %t\nUsage: %d/%d",
+		j.Code, j.URL, j.Active, j.UsageCount, j.UsageLimit,
 	), nil
 }
 

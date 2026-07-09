@@ -1080,3 +1080,129 @@ func TestSearchAllWithoutQuery(t *testing.T) {
 		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
 	}
 }
+
+func TestAccountGet(t *testing.T) {
+	h := newHarness(t)
+	body := `{"id":"a1","name":"Acme Inc","cards_count":42,"created_at":"2024-01-01","auto_postpone_period_in_days":30}`
+	h.route("GET", "/acme/account/settings", stub{Status: 200, Body: body})
+
+	res := h.run("account", "get")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID: a1\nName: Acme Inc\nCards: 42\nCreated: 2024-01-01\nAuto-postpone (days): 30\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/account/settings")
+}
+
+func TestAccountUpdate(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/account/settings", stub{Status: 204})
+
+	res := h.run("account", "update", "--name", "New Name")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Account updated.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/account/settings")
+	assertJSONBody(t, rec, map[string]any{"account": map[string]any{"name": "New Name"}})
+}
+
+func TestAccountUpdateRequiresName(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("account", "update")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestAccountAutoPostpone(t *testing.T) {
+	h := newHarness(t)
+	body := `{"id":"a1","name":"Acme Inc","cards_count":42,"created_at":"2024-01-01","auto_postpone_period_in_days":90}`
+	h.route("PUT", "/acme/account/entropy", stub{Status: 200, Body: body})
+
+	res := h.run("account", "auto-postpone", "90")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Auto-postpone (days): 90") {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/account/entropy")
+	assertJSONBody(t, rec, map[string]any{"entropy": map[string]any{"auto_postpone_period_in_days": float64(90)}})
+}
+
+func TestAccountAutoPostponeInvalidValue(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("account", "auto-postpone", "42")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "3, 7, 11, 30, 90, 365") {
+		t.Errorf("stderr = %q, want valid-values message", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestAccountJoinCodeGet(t *testing.T) {
+	h := newHarness(t)
+	body := `{"code":"ABC-123","usage_count":2,"usage_limit":10,"url":"https://app/join/ABC-123","active":true}`
+	h.route("GET", "/acme/account/join_code", stub{Status: 200, Body: body})
+
+	res := h.run("account", "join-code")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "Code: ABC-123\nURL: https://app/join/ABC-123\nActive: true\nUsage: 2/10\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/account/join_code")
+
+	res = h.run("account", "join-code", "get")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/account/join_code")
+}
+
+func TestAccountJoinCodeSetLimit(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/account/join_code", stub{Status: 204})
+
+	res := h.run("account", "join-code", "set-limit", "25")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Join code usage limit updated.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/account/join_code")
+	assertJSONBody(t, rec, map[string]any{"account_join_code": map[string]any{"usage_limit": float64(25)}})
+}
+
+func TestAccountJoinCodeReset(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/acme/account/join_code", stub{Status: 204})
+
+	res := h.run("account", "join-code", "reset")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Join code reset.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/account/join_code")
+}

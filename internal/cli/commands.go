@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"fizzy-cli/internal/api"
@@ -282,6 +283,108 @@ func runAccount(ctx Context, args []string) int {
 		}
 		fmt.Fprintf(ctx.Stdout, "Default account set to %s\n", slug)
 		return 0
+	case "get":
+		if err := ensureToken(ctx); err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		if err := ensureAccount(ctx); err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/account/settings"), nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatAccountSettings)
+	case "update":
+		if err := ensureToken(ctx); err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		if err := ensureAccount(ctx); err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		fs := flag.NewFlagSet("account update", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		name := fs.String("name", "", "Account name")
+		if err := fs.Parse(args[1:]); err != nil {
+			return ctx.usageError(helpForAccount(), err)
+		}
+		if strings.TrimSpace(*name) == "" {
+			return ctx.handleErr(helpForAccount(), UsageError{Msg: "--name is required"})
+		}
+		payload := map[string]any{"account": map[string]any{"name": strings.TrimSpace(*name)}}
+		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/account/settings"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		return outputNoContent(ctx, resp, "Account updated")
+	case "auto-postpone":
+		if err := ensureToken(ctx); err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		if err := ensureAccount(ctx); err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		if len(args) < 2 {
+			return ctx.handleErr(helpForAccount(), UsageError{Msg: "auto-postpone days is required"})
+		}
+		days, err := strconv.Atoi(strings.TrimSpace(args[1]))
+		if err != nil || !validAutoPostponeDays[days] {
+			return ctx.handleErr(helpForAccount(), UsageError{Msg: "auto-postpone days must be one of 3, 7, 11, 30, 90, 365"})
+		}
+		payload := map[string]any{"entropy": map[string]any{"auto_postpone_period_in_days": days}}
+		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/account/entropy"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatAccountSettings)
+	case "join-code":
+		return runAccountJoinCode(ctx, args[1:])
+	default:
+		fmt.Fprint(ctx.Stderr, helpForAccount())
+		return 2
+	}
+}
+
+// validAutoPostponeDays are the only accepted values for the account-level
+// auto_postpone_period_in_days setting; other values 422 server-side.
+var validAutoPostponeDays = map[int]bool{3: true, 7: true, 11: true, 30: true, 90: true, 365: true}
+
+// runAccountJoinCode manages the account's join code (GET/set-limit/reset).
+func runAccountJoinCode(ctx Context, args []string) int {
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForAccount(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForAccount(), err)
+	}
+	if len(args) == 0 || args[0] == "get" {
+		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/account/join_code"), nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatJoinCode)
+	}
+	switch args[0] {
+	case "set-limit":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForAccount(), UsageError{Msg: "usage limit is required"})
+		}
+		limit, err := strconv.Atoi(strings.TrimSpace(args[1]))
+		if err != nil {
+			return ctx.handleErr(helpForAccount(), UsageError{Msg: "usage limit must be a number"})
+		}
+		payload := map[string]any{"account_join_code": map[string]any{"usage_limit": limit}}
+		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/account/join_code"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		return outputNoContent(ctx, resp, "Join code usage limit updated")
+	case "reset":
+		resp, err := ctx.Client.Do(requestContext(), "DELETE", withAccount(ctx, "/account/join_code"), nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAccount(), err)
+		}
+		return outputNoContent(ctx, resp, "Join code reset")
 	default:
 		fmt.Fprint(ctx.Stderr, helpForAccount())
 		return 2

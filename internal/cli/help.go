@@ -87,9 +87,10 @@ func helpForCard() string {
 	return `USAGE:
   fizzy-cli card list [filters]
   fizzy-cli card get <card-number>
-  fizzy-cli card create --board-id <board-id> --title <title> [--description TEXT] [--status drafted|published] [--tag-id ID ...] [--image PATH]
-  fizzy-cli card update <card-number> [--title TEXT] [--description TEXT] [--status drafted|published] [--tag-id ID ...] [--image PATH]
+  fizzy-cli card create --board-id <board-id> --title <title> [--description TEXT] [--tag TITLE ...] [--image PATH]
+  fizzy-cli card update <card-number> [--title TEXT] [--description TEXT] [--tag TITLE ...] [--image PATH]
   fizzy-cli card delete <card-number>
+  fizzy-cli card publish <card-number>
   fizzy-cli card close <card-number>
   fizzy-cli card reopen <card-number>
   fizzy-cli card not-now <card-number>

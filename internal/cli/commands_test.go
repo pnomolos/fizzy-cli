@@ -119,6 +119,80 @@ func TestCardCreate(t *testing.T) {
 	assertJSONBody(t, rec, map[string]any{"card": map[string]any{"title": "New card", "description": "Some details"}})
 }
 
+func TestCardCreateWithTags(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/boards/3/cards", stub{Status: 201, Headers: map[string]string{"Location": "/acme/cards/42.json"}})
+	h.route("POST", "/acme/cards/42/taggings", stub{Status: 204})
+
+	res := h.run("card", "create", "--board-id", "3", "--title", "New card", "--tag", "Design", "--tag", "#urgent")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card created: /acme/cards/42.json\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	if h.requestCount() != 3 {
+		t.Fatalf("request count = %d, want 3", h.requestCount())
+	}
+	create := h.requests[0]
+	assertRequest(t, create, "POST", "/acme/boards/3/cards")
+	assertJSONBody(t, create, map[string]any{"card": map[string]any{"title": "New card"}})
+	tag1 := h.requests[1]
+	assertRequest(t, tag1, "POST", "/acme/cards/42/taggings")
+	assertJSONBody(t, tag1, map[string]any{"tag_title": "Design"})
+	tag2 := h.requests[2]
+	assertRequest(t, tag2, "POST", "/acme/cards/42/taggings")
+	assertJSONBody(t, tag2, map[string]any{"tag_title": "urgent"})
+}
+
+func TestCardUpdateWithTagsOnly(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/taggings", stub{Status: 204})
+
+	res := h.run("card", "update", "7", "--tag", "Design")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card updated.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	if h.requestCount() != 1 {
+		t.Fatalf("request count = %d, want 1 (no card PUT when only tags)", h.requestCount())
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "POST", "/acme/cards/7/taggings")
+	assertJSONBody(t, rec, map[string]any{"tag_title": "Design"})
+}
+
+func TestCardPublish(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/publish", stub{Status: 201})
+
+	res := h.run("card", "publish", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card published.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/cards/7/publish")
+}
+
+func TestCardNumberFromLocation(t *testing.T) {
+	cases := map[string]string{
+		"/1/cards/18.json":    "18",
+		"/acme/cards/42.json": "42",
+		"/acme/cards/42":      "42",
+		"":                    "",
+		"/acme/boards/9":      "",
+	}
+	for in, want := range cases {
+		if got := cardNumberFromLocation(in); got != want {
+			t.Errorf("cardNumberFromLocation(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestCardClose(t *testing.T) {
 	h := newHarness(t)
 	h.route("POST", "/acme/cards/5/closure", stub{Status: 201})

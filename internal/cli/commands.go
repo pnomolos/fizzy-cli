@@ -450,10 +450,9 @@ func runCard(ctx Context, args []string) int {
 		boardID := fs.String("board-id", "", "Board ID")
 		title := fs.String("title", "", "Card title")
 		description := fs.String("description", "", "Card description")
-		status := fs.String("status", "", "Card status")
 		imagePath := fs.String("image", "", "Image file path")
-		tagIDs := multiString{}
-		fs.Var(&tagIDs, "tag-id", "Tag ID (repeatable)")
+		tags := multiString{}
+		fs.Var(&tags, "tag", "Tag title (repeatable)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return ctx.usageError(helpForCard(), err)
 		}
@@ -461,6 +460,7 @@ func runCard(ctx Context, args []string) int {
 			return ctx.handleErr(helpForCard(), UsageError{Msg: "--board-id and --title are required"})
 		}
 		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/cards")
+		var resp *api.Response
 		if strings.TrimSpace(*imagePath) != "" {
 			fields := map[string][]string{
 				"title": {strings.TrimSpace(*title)},
@@ -468,38 +468,36 @@ func runCard(ctx Context, args []string) int {
 			if strings.TrimSpace(*description) != "" {
 				fields["description"] = []string{*description}
 			}
-			if strings.TrimSpace(*status) != "" {
-				fields["status"] = []string{*status}
-			}
-			if len(tagIDs.values) > 0 {
-				fields["tag_ids[]"] = tagIDs.values
-			}
 			body, contentType, err := multipartBody("card", fields, "image", *imagePath)
 			if err != nil {
 				return ctx.handleErr(helpForCard(), err)
 			}
-			resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, body, contentType, nil)
+			resp, err = ctx.Client.Do(requestContext(), "POST", path, nil, body, contentType, nil)
 			if err != nil {
 				return ctx.handleErr(helpForCard(), err)
 			}
-			return outputLocation(ctx, resp, "Card created")
+		} else {
+			card := map[string]any{
+				"title": strings.TrimSpace(*title),
+			}
+			if strings.TrimSpace(*description) != "" {
+				card["description"] = *description
+			}
+			payload := map[string]any{"card": card}
+			var err error
+			resp, err = ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+			if err != nil {
+				return ctx.handleErr(helpForCard(), err)
+			}
 		}
-		card := map[string]any{
-			"title": strings.TrimSpace(*title),
-		}
-		if strings.TrimSpace(*description) != "" {
-			card["description"] = *description
-		}
-		if strings.TrimSpace(*status) != "" {
-			card["status"] = *status
-		}
-		if len(tagIDs.values) > 0 {
-			card["tag_ids"] = tagIDs.values
-		}
-		payload := map[string]any{"card": card}
-		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
-		if err != nil {
-			return ctx.handleErr(helpForCard(), err)
+		if len(tags.values) > 0 {
+			number := cardNumberFromLocation(resp.Headers.Get("Location"))
+			if number == "" {
+				return ctx.handleErr(helpForCard(), errors.New("could not determine created card number for tagging"))
+			}
+			if err := attachTags(ctx, number, tags.values); err != nil {
+				return ctx.handleErr(helpForCard(), err)
+			}
 		}
 		return outputLocation(ctx, resp, "Card created")
 	case "update":
@@ -510,10 +508,9 @@ func runCard(ctx Context, args []string) int {
 		fs.SetOutput(io.Discard)
 		title := fs.String("title", "", "Card title")
 		description := fs.String("description", "", "Card description")
-		status := fs.String("status", "", "Card status")
 		imagePath := fs.String("image", "", "Image file path")
-		tagIDs := multiString{}
-		fs.Var(&tagIDs, "tag-id", "Tag ID (repeatable)")
+		tags := multiString{}
+		fs.Var(&tags, "tag", "Tag title (repeatable)")
 		if err := fs.Parse(args[2:]); err != nil {
 			return ctx.usageError(helpForCard(), err)
 		}
@@ -524,12 +521,11 @@ func runCard(ctx Context, args []string) int {
 		if strings.TrimSpace(*description) != "" {
 			card["description"] = *description
 		}
-		if strings.TrimSpace(*status) != "" {
-			card["status"] = *status
+		hasTags := len(tags.values) > 0
+		if len(card) == 0 && !hasTags && strings.TrimSpace(*imagePath) == "" {
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "no fields to update"})
 		}
-		if len(tagIDs.values) > 0 {
-			card["tag_ids"] = tagIDs.values
-		}
+		var resp *api.Response
 		if strings.TrimSpace(*imagePath) != "" {
 			fields := map[string][]string{}
 			if titleVal, ok := card["title"].(string); ok && titleVal != "" {
@@ -538,36 +534,35 @@ func runCard(ctx Context, args []string) int {
 			if descVal, ok := card["description"].(string); ok && descVal != "" {
 				fields["description"] = []string{descVal}
 			}
-			if statusVal, ok := card["status"].(string); ok && statusVal != "" {
-				fields["status"] = []string{statusVal}
-			}
-			if tagsVal, ok := card["tag_ids"].([]string); ok && len(tagsVal) > 0 {
-				fields["tag_ids[]"] = tagsVal
-			}
 			body, contentType, err := multipartBody("card", fields, "image", *imagePath)
 			if err != nil {
 				return ctx.handleErr(helpForCard(), err)
 			}
-			resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/cards/"+args[1]), nil, body, contentType, nil)
+			resp, err = ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/cards/"+args[1]), nil, body, contentType, nil)
 			if err != nil {
 				return ctx.handleErr(helpForCard(), err)
 			}
-			if ctx.Output.JSON {
-				return ctx.printJSONResponse(resp)
+		} else if len(card) > 0 {
+			payload := map[string]any{"card": card}
+			var err error
+			resp, err = ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/cards/"+args[1]), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+			if err != nil {
+				return ctx.handleErr(helpForCard(), err)
 			}
-			fmt.Fprintln(ctx.Stdout, "Card updated.")
-			return 0
 		}
-		if len(card) == 0 {
-			return ctx.handleErr(helpForCard(), UsageError{Msg: "no fields to update"})
-		}
-		payload := map[string]any{"card": card}
-		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/cards/"+args[1]), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
-		if err != nil {
-			return ctx.handleErr(helpForCard(), err)
+		if hasTags {
+			if err := attachTags(ctx, args[1], tags.values); err != nil {
+				return ctx.handleErr(helpForCard(), err)
+			}
 		}
 		if ctx.Output.JSON {
-			return ctx.printJSONResponse(resp)
+			if resp != nil {
+				return ctx.printJSONResponse(resp)
+			}
+			if err := printJSON(ctx.Stdout, map[string]any{"status": 200}); err != nil {
+				return ctx.handleErr(helpForCard(), err)
+			}
+			return 0
 		}
 		fmt.Fprintln(ctx.Stdout, "Card updated.")
 		return 0
@@ -580,6 +575,8 @@ func runCard(ctx Context, args []string) int {
 			return ctx.handleErr(helpForCard(), err)
 		}
 		return outputNoContent(ctx, resp, "Card deleted")
+	case "publish":
+		return simpleCardAction(ctx, helpForCard(), args, "publish", "POST", "/publish", "Card published")
 	case "close":
 		return simpleCardAction(ctx, helpForCard(), args, "close", "POST", "/closure", "Card closed")
 	case "reopen":
@@ -1088,6 +1085,43 @@ func listWithPagination(ctx Context, help string, path string, query url.Values,
 		nextQuery = nil
 	}
 	return 0
+}
+
+// cardNumberFromLocation extracts the card number from a create response
+// Location header of the form "/{account}/cards/{number}.json".
+func cardNumberFromLocation(location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return ""
+	}
+	location = strings.TrimSuffix(location, ".json")
+	idx := strings.LastIndex(location, "/cards/")
+	if idx < 0 {
+		return ""
+	}
+	number := location[idx+len("/cards/"):]
+	if slash := strings.IndexByte(number, '/'); slash >= 0 {
+		number = number[:slash]
+	}
+	return number
+}
+
+// attachTags toggles each tag onto a card via the taggings endpoint. Titles are
+// trimmed and any leading '#' is stripped; empty titles are skipped. The server
+// creates the tag if it does not yet exist.
+func attachTags(ctx Context, cardNumber string, titles []string) error {
+	for _, raw := range titles {
+		title := strings.TrimPrefix(strings.TrimSpace(raw), "#")
+		if title == "" {
+			continue
+		}
+		payload := map[string]any{"tag_title": title}
+		path := withAccount(ctx, "/cards/"+cardNumber+"/taggings")
+		if _, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func simpleCardAction(ctx Context, help string, args []string, name string, method string, suffix string, message string) int {

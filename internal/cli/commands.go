@@ -20,7 +20,7 @@ import (
 
 func runAuth(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForAuth())
+		fmt.Fprint(ctx.Stderr, helpForAuth())
 		return 2
 	}
 	switch args[0] {
@@ -31,70 +31,70 @@ func runAuth(ctx Context, args []string) int {
 		email := fs.String("email", "", "Email address for magic-link login")
 		code := fs.String("code", "", "Magic-link code")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForAuth(), err)
+			return ctx.usageError(helpForAuth(), err)
 		}
 		if strings.TrimSpace(*token) != "" && strings.TrimSpace(*email) != "" {
-			return handleErr(helpForAuth(), UsageError{Msg: "--token and --email cannot be used together"})
+			return ctx.handleErr(helpForAuth(), UsageError{Msg: "--token and --email cannot be used together"})
 		}
 		if strings.TrimSpace(*email) != "" {
 			return authMagicLink(ctx, strings.TrimSpace(*email), strings.TrimSpace(*code))
 		}
 		val := strings.TrimSpace(*token)
 		if val == "" {
-			readToken, err := readSecret("Token")
+			readToken, err := readSecret(ctx, "Token")
 			if err != nil {
-				return handleErr(helpForAuth(), err)
+				return ctx.handleErr(helpForAuth(), err)
 			}
 			val = readToken
 		}
 		if val == "" {
-			return handleErr(helpForAuth(), UsageError{Msg: "token is required"})
+			return ctx.handleErr(helpForAuth(), UsageError{Msg: "token is required"})
 		}
 		cfg := ctx.Config
 		cfg.Token = val
 		cfg.SessionToken = ""
 		if err := configSave(ctx.ConfigPath, cfg); err != nil {
-			return handleErr(helpForAuth(), err)
+			return ctx.handleErr(helpForAuth(), err)
 		}
-		fmt.Fprintf(os.Stdout, "Token saved to %s\n", ctx.ConfigPath)
+		fmt.Fprintf(ctx.Stdout, "Token saved to %s\n", ctx.ConfigPath)
 		return 0
 	case "logout":
 		cfg := ctx.Config
 		cfg.Token = ""
 		cfg.SessionToken = ""
 		if err := configSave(ctx.ConfigPath, cfg); err != nil {
-			return handleErr(helpForAuth(), err)
+			return ctx.handleErr(helpForAuth(), err)
 		}
-		fmt.Fprintln(os.Stdout, "Credentials cleared.")
+		fmt.Fprintln(ctx.Stdout, "Credentials cleared.")
 		return 0
 	case "status":
 		if ctx.Token == "" && ctx.SessionToken == "" {
-			fmt.Fprintln(os.Stdout, "Not logged in (no credentials configured).")
+			fmt.Fprintln(ctx.Stdout, "Not logged in (no credentials configured).")
 			return 0
 		}
 		if err := ensureToken(ctx); err != nil {
-			return handleErr(helpForAuth(), err)
+			return ctx.handleErr(helpForAuth(), err)
 		}
 		resp, err := ctx.Client.Do(requestContext(), "GET", "/my/identity", nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForAuth(), err)
+			return ctx.handleErr(helpForAuth(), err)
 		}
 		if ctx.Output.JSON {
-			return printJSONResponse(resp)
+			return ctx.printJSONResponse(resp)
 		}
 		authType := "session token"
 		if ctx.Token != "" {
 			authType = "personal access token"
 		}
-		fmt.Fprintf(os.Stdout, "Authenticated using %s. Accessible accounts:\n", authType)
+		fmt.Fprintf(ctx.Stdout, "Authenticated using %s. Accessible accounts:\n", authType)
 		rows, err := identityToRows(resp.Body)
 		if err != nil {
-			return handleErr(helpForAuth(), err)
+			return ctx.handleErr(helpForAuth(), err)
 		}
-		printTable(os.Stdout, []string{"SLUG", "NAME", "USER"}, rows, ctx.Output.Plain)
+		printTable(ctx.Stdout, []string{"SLUG", "NAME", "USER"}, rows, ctx.Output.Plain)
 		return 0
 	default:
-		fmt.Fprint(os.Stderr, helpForAuth())
+		fmt.Fprint(ctx.Stderr, helpForAuth())
 		return 2
 	}
 }
@@ -109,106 +109,106 @@ type sessionAuthResponse struct {
 
 func authMagicLink(ctx Context, email, code string) int {
 	if strings.TrimSpace(email) == "" {
-		return handleErr(helpForAuth(), UsageError{Msg: "--email is required"})
+		return ctx.handleErr(helpForAuth(), UsageError{Msg: "--email is required"})
 	}
 	client := api.NewClient(ctx.BaseURL, "", "", fmt.Sprintf("fizzy-cli/%s", ctx.Version))
 	request := map[string]any{"email_address": email}
 	resp, err := client.Do(requestContext(), "POST", "/session", nil, bytes.NewBuffer(mustJSON(request)), "application/json", nil)
 	if err != nil {
-		return handleErr(helpForAuth(), err)
+		return ctx.handleErr(helpForAuth(), err)
 	}
 	var pending pendingAuthResponse
 	if err := json.Unmarshal(resp.Body, &pending); err != nil {
-		return handleErr(helpForAuth(), err)
+		return ctx.handleErr(helpForAuth(), err)
 	}
 	if strings.TrimSpace(pending.PendingAuthenticationToken) == "" {
-		return handleErr(helpForAuth(), errors.New("missing pending_authentication_token in response"))
+		return ctx.handleErr(helpForAuth(), errors.New("missing pending_authentication_token in response"))
 	}
 
 	if strings.TrimSpace(code) == "" {
 		if !isTTY(os.Stdin) {
-			return handleErr(helpForAuth(), UsageError{Msg: "--code is required when not running in a TTY"})
+			return ctx.handleErr(helpForAuth(), UsageError{Msg: "--code is required when not running in a TTY"})
 		}
-		readCode, err := readSecret("Magic link code")
+		readCode, err := readSecret(ctx, "Magic link code")
 		if err != nil {
-			return handleErr(helpForAuth(), err)
+			return ctx.handleErr(helpForAuth(), err)
 		}
 		code = readCode
 	}
 	if strings.TrimSpace(code) == "" {
-		return handleErr(helpForAuth(), UsageError{Msg: "magic link code is required"})
+		return ctx.handleErr(helpForAuth(), UsageError{Msg: "magic link code is required"})
 	}
 
 	verifyRequest := map[string]any{"code": strings.TrimSpace(code)}
 	headers := map[string]string{"Cookie": "pending_authentication_token=" + pending.PendingAuthenticationToken}
 	verifyResp, err := client.Do(requestContext(), "POST", "/session/magic_link", nil, bytes.NewBuffer(mustJSON(verifyRequest)), "application/json", headers)
 	if err != nil {
-		return handleErr(helpForAuth(), err)
+		return ctx.handleErr(helpForAuth(), err)
 	}
 	var session sessionAuthResponse
 	if err := json.Unmarshal(verifyResp.Body, &session); err != nil {
-		return handleErr(helpForAuth(), err)
+		return ctx.handleErr(helpForAuth(), err)
 	}
 	if strings.TrimSpace(session.SessionToken) == "" {
-		return handleErr(helpForAuth(), errors.New("missing session_token in response"))
+		return ctx.handleErr(helpForAuth(), errors.New("missing session_token in response"))
 	}
 	cfg := ctx.Config
 	cfg.SessionToken = session.SessionToken
 	cfg.Token = ""
 	if err := configSave(ctx.ConfigPath, cfg); err != nil {
-		return handleErr(helpForAuth(), err)
+		return ctx.handleErr(helpForAuth(), err)
 	}
-	fmt.Fprintf(os.Stdout, "Session saved to %s\n", ctx.ConfigPath)
+	fmt.Fprintf(ctx.Stdout, "Session saved to %s\n", ctx.ConfigPath)
 	return 0
 }
 
 func runAccount(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForAccount())
+		fmt.Fprint(ctx.Stderr, helpForAccount())
 		return 2
 	}
 	switch args[0] {
 	case "list":
 		if err := ensureToken(ctx); err != nil {
-			return handleErr(helpForAccount(), err)
+			return ctx.handleErr(helpForAccount(), err)
 		}
 		resp, err := ctx.Client.Do(requestContext(), "GET", "/my/identity", nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForAccount(), err)
+			return ctx.handleErr(helpForAccount(), err)
 		}
 		if ctx.Output.JSON {
-			return printJSONResponse(resp)
+			return ctx.printJSONResponse(resp)
 		}
 		rows, err := identityToRows(resp.Body)
 		if err != nil {
-			return handleErr(helpForAccount(), err)
+			return ctx.handleErr(helpForAccount(), err)
 		}
-		printTable(os.Stdout, []string{"SLUG", "NAME", "USER"}, rows, ctx.Output.Plain)
+		printTable(ctx.Stdout, []string{"SLUG", "NAME", "USER"}, rows, ctx.Output.Plain)
 		return 0
 	case "set":
 		if len(args) < 2 {
-			return handleErr(helpForAccount(), UsageError{Msg: "account slug is required"})
+			return ctx.handleErr(helpForAccount(), UsageError{Msg: "account slug is required"})
 		}
 		slug := normalizeAccount(args[1])
 		if slug == "" {
-			return handleErr(helpForAccount(), UsageError{Msg: "account slug is required"})
+			return ctx.handleErr(helpForAccount(), UsageError{Msg: "account slug is required"})
 		}
 		cfg := ctx.Config
 		cfg.Account = slug
 		if err := configSave(ctx.ConfigPath, cfg); err != nil {
-			return handleErr(helpForAccount(), err)
+			return ctx.handleErr(helpForAccount(), err)
 		}
-		fmt.Fprintf(os.Stdout, "Default account set to %s\n", slug)
+		fmt.Fprintf(ctx.Stdout, "Default account set to %s\n", slug)
 		return 0
 	default:
-		fmt.Fprint(os.Stderr, helpForAccount())
+		fmt.Fprint(ctx.Stderr, helpForAccount())
 		return 2
 	}
 }
 
 func runConfig(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForConfig())
+		fmt.Fprint(ctx.Stderr, helpForConfig())
 		return 2
 	}
 	switch args[0] {
@@ -221,18 +221,18 @@ func runConfig(ctx Context, args []string) int {
 				"session_token_set": ctx.Config.SessionToken != "",
 				"config_path":       ctx.ConfigPath,
 			}
-			if err := printJSON(os.Stdout, payload); err != nil {
-				return handleErr(helpForConfig(), err)
+			if err := printJSON(ctx.Stdout, payload); err != nil {
+				return ctx.handleErr(helpForConfig(), err)
 			}
 			return 0
 		}
-		fmt.Fprintf(os.Stdout, "Config path: %s\n", ctx.ConfigPath)
-		fmt.Fprintf(os.Stdout, "Base URL: %s\n", firstNonEmpty(ctx.Config.BaseURL, ctx.BaseURL))
+		fmt.Fprintf(ctx.Stdout, "Config path: %s\n", ctx.ConfigPath)
+		fmt.Fprintf(ctx.Stdout, "Base URL: %s\n", firstNonEmpty(ctx.Config.BaseURL, ctx.BaseURL))
 		if ctx.Config.Account != "" {
-			fmt.Fprintf(os.Stdout, "Account: %s\n", ctx.Config.Account)
+			fmt.Fprintf(ctx.Stdout, "Account: %s\n", ctx.Config.Account)
 		}
-		fmt.Fprintf(os.Stdout, "Token set: %t\n", ctx.Config.Token != "")
-		fmt.Fprintf(os.Stdout, "Session token set: %t\n", ctx.Config.SessionToken != "")
+		fmt.Fprintf(ctx.Stdout, "Token set: %t\n", ctx.Config.Token != "")
+		fmt.Fprintf(ctx.Stdout, "Session token set: %t\n", ctx.Config.SessionToken != "")
 		return 0
 	case "set":
 		fs := flag.NewFlagSet("config set", flag.ContinueOnError)
@@ -240,10 +240,10 @@ func runConfig(ctx Context, args []string) int {
 		baseURL := fs.String("base-url", "", "API base URL")
 		account := fs.String("account", "", "Account slug")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForConfig(), err)
+			return ctx.usageError(helpForConfig(), err)
 		}
 		if strings.TrimSpace(*baseURL) == "" && strings.TrimSpace(*account) == "" {
-			return handleErr(helpForConfig(), UsageError{Msg: "at least one of --base-url or --account is required"})
+			return ctx.handleErr(helpForConfig(), UsageError{Msg: "at least one of --base-url or --account is required"})
 		}
 		cfg := ctx.Config
 		if strings.TrimSpace(*baseURL) != "" {
@@ -253,41 +253,41 @@ func runConfig(ctx Context, args []string) int {
 			cfg.Account = normalizeAccount(*account)
 		}
 		if err := configSave(ctx.ConfigPath, cfg); err != nil {
-			return handleErr(helpForConfig(), err)
+			return ctx.handleErr(helpForConfig(), err)
 		}
-		fmt.Fprintln(os.Stdout, "Config updated.")
+		fmt.Fprintln(ctx.Stdout, "Config updated.")
 		return 0
 	default:
-		fmt.Fprint(os.Stderr, helpForConfig())
+		fmt.Fprint(ctx.Stderr, helpForConfig())
 		return 2
 	}
 }
 
 func runBoard(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForBoard())
+		fmt.Fprint(ctx.Stderr, helpForBoard())
 		return 2
 	}
 	if err := ensureToken(ctx); err != nil {
-		return handleErr(helpForBoard(), err)
+		return ctx.handleErr(helpForBoard(), err)
 	}
 	if err := ensureAccount(ctx); err != nil {
-		return handleErr(helpForBoard(), err)
+		return ctx.handleErr(helpForBoard(), err)
 	}
 	switch args[0] {
 	case "list":
 		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/boards"), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForBoard(), err)
+			return ctx.handleErr(helpForBoard(), err)
 		}
 		return outputListOrJSON(ctx, resp, boardListHeaders, boardListRows)
 	case "get":
 		if len(args) < 2 {
-			return handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
 		}
 		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/boards/"+args[1]), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForBoard(), err)
+			return ctx.handleErr(helpForBoard(), err)
 		}
 		return outputJSONOrPretty(ctx, resp.Body, formatBoard)
 	case "create":
@@ -298,10 +298,10 @@ func runBoard(ctx Context, args []string) int {
 		autoPostpone := fs.Int("auto-postpone-days", 0, "Auto postpone period (days)")
 		publicDesc := fs.String("public-description", "", "Public description")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForBoard(), err)
+			return ctx.usageError(helpForBoard(), err)
 		}
 		if strings.TrimSpace(*name) == "" {
-			return handleErr(helpForBoard(), UsageError{Msg: "--name is required"})
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "--name is required"})
 		}
 		payload := map[string]any{
 			"board": map[string]any{
@@ -317,12 +317,12 @@ func runBoard(ctx Context, args []string) int {
 		}
 		resp, err := ctx.Client.Do(requestContext(), "POST", withAccount(ctx, "/boards"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForBoard(), err)
+			return ctx.handleErr(helpForBoard(), err)
 		}
 		return outputLocation(ctx, resp, "Board created")
 	case "update":
 		if len(args) < 2 {
-			return handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
 		}
 		fs := flag.NewFlagSet("board update", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -334,10 +334,10 @@ func runBoard(ctx Context, args []string) int {
 		userIDs := multiString{}
 		fs.Var(&userIDs, "user-id", "User ID (repeatable)")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForBoard(), err)
+			return ctx.usageError(helpForBoard(), err)
 		}
 		if *allAccess && *noAllAccess {
-			return handleErr(helpForBoard(), UsageError{Msg: "--all-access and --no-all-access cannot be used together"})
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "--all-access and --no-all-access cannot be used together"})
 		}
 		board := map[string]any{}
 		if strings.TrimSpace(*name) != "" {
@@ -359,39 +359,39 @@ func runBoard(ctx Context, args []string) int {
 			board["user_ids"] = userIDs.values
 		}
 		if len(board) == 0 {
-			return handleErr(helpForBoard(), UsageError{Msg: "no fields to update"})
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "no fields to update"})
 		}
 		payload := map[string]any{"board": board}
 		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/boards/"+args[1]), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForBoard(), err)
+			return ctx.handleErr(helpForBoard(), err)
 		}
 		return outputNoContent(ctx, resp, "Board updated")
 	case "delete":
 		if len(args) < 2 {
-			return handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
 		}
 		resp, err := ctx.Client.Do(requestContext(), "DELETE", withAccount(ctx, "/boards/"+args[1]), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForBoard(), err)
+			return ctx.handleErr(helpForBoard(), err)
 		}
 		return outputNoContent(ctx, resp, "Board deleted")
 	default:
-		fmt.Fprint(os.Stderr, helpForBoard())
+		fmt.Fprint(ctx.Stderr, helpForBoard())
 		return 2
 	}
 }
 
 func runCard(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForCard())
+		fmt.Fprint(ctx.Stderr, helpForCard())
 		return 2
 	}
 	if err := ensureToken(ctx); err != nil {
-		return handleErr(helpForCard(), err)
+		return ctx.handleErr(helpForCard(), err)
 	}
 	if err := ensureAccount(ctx); err != nil {
-		return handleErr(helpForCard(), err)
+		return ctx.handleErr(helpForCard(), err)
 	}
 	switch args[0] {
 	case "list":
@@ -418,7 +418,7 @@ func runCard(ctx Context, args []string) int {
 		fs.Var(&cardIDs, "card-id", "Card ID filter")
 		fs.Var(&terms, "term", "Search term")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForCard(), err)
+			return ctx.usageError(helpForCard(), err)
 		}
 		query := url.Values{}
 		addListParam(query, "board_ids[]", boardIDs.values)
@@ -437,11 +437,11 @@ func runCard(ctx Context, args []string) int {
 		return listWithPagination(ctx, helpForCard(), withAccount(ctx, "/cards"), query, *all, cardListHeaders, cardListRows)
 	case "get":
 		if len(args) < 2 {
-			return handleErr(helpForCard(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "card number is required"})
 		}
 		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/cards/"+args[1]), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForCard(), err)
+			return ctx.handleErr(helpForCard(), err)
 		}
 		return outputJSONOrPretty(ctx, resp.Body, formatCard)
 	case "create":
@@ -455,10 +455,10 @@ func runCard(ctx Context, args []string) int {
 		tagIDs := multiString{}
 		fs.Var(&tagIDs, "tag-id", "Tag ID (repeatable)")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForCard(), err)
+			return ctx.usageError(helpForCard(), err)
 		}
 		if strings.TrimSpace(*boardID) == "" || strings.TrimSpace(*title) == "" {
-			return handleErr(helpForCard(), UsageError{Msg: "--board-id and --title are required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "--board-id and --title are required"})
 		}
 		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/cards")
 		if strings.TrimSpace(*imagePath) != "" {
@@ -476,11 +476,11 @@ func runCard(ctx Context, args []string) int {
 			}
 			body, contentType, err := multipartBody("card", fields, "image", *imagePath)
 			if err != nil {
-				return handleErr(helpForCard(), err)
+				return ctx.handleErr(helpForCard(), err)
 			}
 			resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, body, contentType, nil)
 			if err != nil {
-				return handleErr(helpForCard(), err)
+				return ctx.handleErr(helpForCard(), err)
 			}
 			return outputLocation(ctx, resp, "Card created")
 		}
@@ -499,12 +499,12 @@ func runCard(ctx Context, args []string) int {
 		payload := map[string]any{"card": card}
 		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForCard(), err)
+			return ctx.handleErr(helpForCard(), err)
 		}
 		return outputLocation(ctx, resp, "Card created")
 	case "update":
 		if len(args) < 2 {
-			return handleErr(helpForCard(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "card number is required"})
 		}
 		fs := flag.NewFlagSet("card update", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -515,7 +515,7 @@ func runCard(ctx Context, args []string) int {
 		tagIDs := multiString{}
 		fs.Var(&tagIDs, "tag-id", "Tag ID (repeatable)")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForCard(), err)
+			return ctx.usageError(helpForCard(), err)
 		}
 		card := map[string]any{}
 		if strings.TrimSpace(*title) != "" {
@@ -546,38 +546,38 @@ func runCard(ctx Context, args []string) int {
 			}
 			body, contentType, err := multipartBody("card", fields, "image", *imagePath)
 			if err != nil {
-				return handleErr(helpForCard(), err)
+				return ctx.handleErr(helpForCard(), err)
 			}
 			resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/cards/"+args[1]), nil, body, contentType, nil)
 			if err != nil {
-				return handleErr(helpForCard(), err)
+				return ctx.handleErr(helpForCard(), err)
 			}
 			if ctx.Output.JSON {
-				return printJSONResponse(resp)
+				return ctx.printJSONResponse(resp)
 			}
-			fmt.Fprintln(os.Stdout, "Card updated.")
+			fmt.Fprintln(ctx.Stdout, "Card updated.")
 			return 0
 		}
 		if len(card) == 0 {
-			return handleErr(helpForCard(), UsageError{Msg: "no fields to update"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "no fields to update"})
 		}
 		payload := map[string]any{"card": card}
 		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/cards/"+args[1]), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForCard(), err)
+			return ctx.handleErr(helpForCard(), err)
 		}
 		if ctx.Output.JSON {
-			return printJSONResponse(resp)
+			return ctx.printJSONResponse(resp)
 		}
-		fmt.Fprintln(os.Stdout, "Card updated.")
+		fmt.Fprintln(ctx.Stdout, "Card updated.")
 		return 0
 	case "delete":
 		if len(args) < 2 {
-			return handleErr(helpForCard(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "card number is required"})
 		}
 		resp, err := ctx.Client.Do(requestContext(), "DELETE", withAccount(ctx, "/cards/"+args[1]), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForCard(), err)
+			return ctx.handleErr(helpForCard(), err)
 		}
 		return outputNoContent(ctx, resp, "Card deleted")
 	case "close":
@@ -588,61 +588,61 @@ func runCard(ctx Context, args []string) int {
 		return simpleCardAction(ctx, helpForCard(), args, "not-now", "POST", "/not_now", "Card moved to Not Now")
 	case "triage":
 		if len(args) < 2 {
-			return handleErr(helpForCard(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "card number is required"})
 		}
 		fs := flag.NewFlagSet("card triage", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		columnID := fs.String("column-id", "", "Column ID")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForCard(), err)
+			return ctx.usageError(helpForCard(), err)
 		}
 		if strings.TrimSpace(*columnID) == "" {
-			return handleErr(helpForCard(), UsageError{Msg: "--column-id is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "--column-id is required"})
 		}
 		payload := map[string]any{"column_id": strings.TrimSpace(*columnID)}
 		resp, err := ctx.Client.Do(requestContext(), "POST", withAccount(ctx, "/cards/"+args[1]+"/triage"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForCard(), err)
+			return ctx.handleErr(helpForCard(), err)
 		}
 		return outputNoContent(ctx, resp, "Card moved into column")
 	case "untriage":
 		return simpleCardAction(ctx, helpForCard(), args, "untriage", "DELETE", "/triage", "Card moved back to triage")
 	case "tag":
 		if len(args) < 2 {
-			return handleErr(helpForCard(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "card number is required"})
 		}
 		fs := flag.NewFlagSet("card tag", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		title := fs.String("title", "", "Tag title")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForCard(), err)
+			return ctx.usageError(helpForCard(), err)
 		}
 		if strings.TrimSpace(*title) == "" {
-			return handleErr(helpForCard(), UsageError{Msg: "--title is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "--title is required"})
 		}
 		payload := map[string]any{"tag_title": strings.TrimPrefix(strings.TrimSpace(*title), "#")}
 		resp, err := ctx.Client.Do(requestContext(), "POST", withAccount(ctx, "/cards/"+args[1]+"/taggings"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForCard(), err)
+			return ctx.handleErr(helpForCard(), err)
 		}
 		return outputNoContent(ctx, resp, "Tag toggled")
 	case "assign":
 		if len(args) < 2 {
-			return handleErr(helpForCard(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "card number is required"})
 		}
 		fs := flag.NewFlagSet("card assign", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		assignee := fs.String("assignee-id", "", "Assignee ID")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForCard(), err)
+			return ctx.usageError(helpForCard(), err)
 		}
 		if strings.TrimSpace(*assignee) == "" {
-			return handleErr(helpForCard(), UsageError{Msg: "--assignee-id is required"})
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "--assignee-id is required"})
 		}
 		payload := map[string]any{"assignee_id": strings.TrimSpace(*assignee)}
 		resp, err := ctx.Client.Do(requestContext(), "POST", withAccount(ctx, "/cards/"+args[1]+"/assignments"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForCard(), err)
+			return ctx.handleErr(helpForCard(), err)
 		}
 		return outputNoContent(ctx, resp, "Assignment toggled")
 	case "watch":
@@ -650,131 +650,131 @@ func runCard(ctx Context, args []string) int {
 	case "unwatch":
 		return simpleCardAction(ctx, helpForCard(), args, "unwatch", "DELETE", "/watch", "Unsubscribed from card")
 	default:
-		fmt.Fprint(os.Stderr, helpForCard())
+		fmt.Fprint(ctx.Stderr, helpForCard())
 		return 2
 	}
 }
 
 func runComment(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForComment())
+		fmt.Fprint(ctx.Stderr, helpForComment())
 		return 2
 	}
 	if err := ensureToken(ctx); err != nil {
-		return handleErr(helpForComment(), err)
+		return ctx.handleErr(helpForComment(), err)
 	}
 	if err := ensureAccount(ctx); err != nil {
-		return handleErr(helpForComment(), err)
+		return ctx.handleErr(helpForComment(), err)
 	}
 	switch args[0] {
 	case "list":
 		if len(args) < 2 {
-			return handleErr(helpForComment(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForComment(), UsageError{Msg: "card number is required"})
 		}
 		path := withAccount(ctx, "/cards/"+args[1]+"/comments")
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForComment(), err)
+			return ctx.handleErr(helpForComment(), err)
 		}
 		return outputListOrJSON(ctx, resp, commentListHeaders, commentListRows)
 	case "get":
 		if len(args) < 3 {
-			return handleErr(helpForComment(), UsageError{Msg: "card number and comment id are required"})
+			return ctx.handleErr(helpForComment(), UsageError{Msg: "card number and comment id are required"})
 		}
 		path := withAccount(ctx, "/cards/"+args[1]+"/comments/"+args[2])
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForComment(), err)
+			return ctx.handleErr(helpForComment(), err)
 		}
 		return outputJSONOrPretty(ctx, resp.Body, formatComment)
 	case "create":
 		if len(args) < 2 {
-			return handleErr(helpForComment(), UsageError{Msg: "card number is required"})
+			return ctx.handleErr(helpForComment(), UsageError{Msg: "card number is required"})
 		}
 		fs := flag.NewFlagSet("comment create", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		body := fs.String("body", "", "Comment body")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForComment(), err)
+			return ctx.usageError(helpForComment(), err)
 		}
 		if strings.TrimSpace(*body) == "" {
-			return handleErr(helpForComment(), UsageError{Msg: "--body is required"})
+			return ctx.handleErr(helpForComment(), UsageError{Msg: "--body is required"})
 		}
 		payload := map[string]any{"comment": map[string]any{"body": *body}}
 		path := withAccount(ctx, "/cards/"+args[1]+"/comments")
 		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForComment(), err)
+			return ctx.handleErr(helpForComment(), err)
 		}
 		return outputLocation(ctx, resp, "Comment created")
 	case "update":
 		if len(args) < 3 {
-			return handleErr(helpForComment(), UsageError{Msg: "card number and comment id are required"})
+			return ctx.handleErr(helpForComment(), UsageError{Msg: "card number and comment id are required"})
 		}
 		fs := flag.NewFlagSet("comment update", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		body := fs.String("body", "", "Comment body")
 		if err := fs.Parse(args[3:]); err != nil {
-			return usageError(helpForComment(), err)
+			return ctx.usageError(helpForComment(), err)
 		}
 		if strings.TrimSpace(*body) == "" {
-			return handleErr(helpForComment(), UsageError{Msg: "--body is required"})
+			return ctx.handleErr(helpForComment(), UsageError{Msg: "--body is required"})
 		}
 		payload := map[string]any{"comment": map[string]any{"body": *body}}
 		path := withAccount(ctx, "/cards/"+args[1]+"/comments/"+args[2])
 		resp, err := ctx.Client.Do(requestContext(), "PUT", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForComment(), err)
+			return ctx.handleErr(helpForComment(), err)
 		}
 		if ctx.Output.JSON {
-			return printJSONResponse(resp)
+			return ctx.printJSONResponse(resp)
 		}
-		fmt.Fprintln(os.Stdout, "Comment updated.")
+		fmt.Fprintln(ctx.Stdout, "Comment updated.")
 		return 0
 	case "delete":
 		if len(args) < 3 {
-			return handleErr(helpForComment(), UsageError{Msg: "card number and comment id are required"})
+			return ctx.handleErr(helpForComment(), UsageError{Msg: "card number and comment id are required"})
 		}
 		path := withAccount(ctx, "/cards/"+args[1]+"/comments/"+args[2])
 		resp, err := ctx.Client.Do(requestContext(), "DELETE", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForComment(), err)
+			return ctx.handleErr(helpForComment(), err)
 		}
 		return outputNoContent(ctx, resp, "Comment deleted")
 	default:
-		fmt.Fprint(os.Stderr, helpForComment())
+		fmt.Fprint(ctx.Stderr, helpForComment())
 		return 2
 	}
 }
 
 func runTag(ctx Context, args []string) int {
 	if len(args) == 0 || args[0] != "list" {
-		fmt.Fprint(os.Stderr, helpForTag())
+		fmt.Fprint(ctx.Stderr, helpForTag())
 		return 2
 	}
 	if err := ensureToken(ctx); err != nil {
-		return handleErr(helpForTag(), err)
+		return ctx.handleErr(helpForTag(), err)
 	}
 	if err := ensureAccount(ctx); err != nil {
-		return handleErr(helpForTag(), err)
+		return ctx.handleErr(helpForTag(), err)
 	}
 	resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/tags"), nil, nil, "", nil)
 	if err != nil {
-		return handleErr(helpForTag(), err)
+		return ctx.handleErr(helpForTag(), err)
 	}
 	return outputListOrJSON(ctx, resp, tagListHeaders, tagListRows)
 }
 
 func runColumn(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForColumn())
+		fmt.Fprint(ctx.Stderr, helpForColumn())
 		return 2
 	}
 	if err := ensureToken(ctx); err != nil {
-		return handleErr(helpForColumn(), err)
+		return ctx.handleErr(helpForColumn(), err)
 	}
 	if err := ensureAccount(ctx); err != nil {
-		return handleErr(helpForColumn(), err)
+		return ctx.handleErr(helpForColumn(), err)
 	}
 	switch args[0] {
 	case "list":
@@ -782,34 +782,34 @@ func runColumn(ctx Context, args []string) int {
 		fs.SetOutput(io.Discard)
 		boardID := fs.String("board-id", "", "Board ID")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForColumn(), err)
+			return ctx.usageError(helpForColumn(), err)
 		}
 		if strings.TrimSpace(*boardID) == "" {
-			return handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
 		}
 		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/columns")
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForColumn(), err)
+			return ctx.handleErr(helpForColumn(), err)
 		}
 		return outputListOrJSON(ctx, resp, columnListHeaders, columnListRows)
 	case "get":
 		if len(args) < 2 {
-			return handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
 		}
 		fs := flag.NewFlagSet("column get", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		boardID := fs.String("board-id", "", "Board ID")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForColumn(), err)
+			return ctx.usageError(helpForColumn(), err)
 		}
 		if strings.TrimSpace(*boardID) == "" {
-			return handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
 		}
 		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/columns/"+args[1])
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForColumn(), err)
+			return ctx.handleErr(helpForColumn(), err)
 		}
 		return outputJSONOrPretty(ctx, resp.Body, formatColumn)
 	case "create":
@@ -819,10 +819,10 @@ func runColumn(ctx Context, args []string) int {
 		name := fs.String("name", "", "Column name")
 		color := fs.String("color", "", "Column color")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForColumn(), err)
+			return ctx.usageError(helpForColumn(), err)
 		}
 		if strings.TrimSpace(*boardID) == "" || strings.TrimSpace(*name) == "" {
-			return handleErr(helpForColumn(), UsageError{Msg: "--board-id and --name are required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--board-id and --name are required"})
 		}
 		column := map[string]any{"name": strings.TrimSpace(*name)}
 		if strings.TrimSpace(*color) != "" {
@@ -832,12 +832,12 @@ func runColumn(ctx Context, args []string) int {
 		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/columns")
 		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForColumn(), err)
+			return ctx.handleErr(helpForColumn(), err)
 		}
 		return outputLocation(ctx, resp, "Column created")
 	case "update":
 		if len(args) < 2 {
-			return handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
 		}
 		fs := flag.NewFlagSet("column update", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -845,10 +845,10 @@ func runColumn(ctx Context, args []string) int {
 		name := fs.String("name", "", "Column name")
 		color := fs.String("color", "", "Column color")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForColumn(), err)
+			return ctx.usageError(helpForColumn(), err)
 		}
 		if strings.TrimSpace(*boardID) == "" {
-			return handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
 		}
 		column := map[string]any{}
 		if strings.TrimSpace(*name) != "" {
@@ -858,124 +858,124 @@ func runColumn(ctx Context, args []string) int {
 			column["color"] = strings.TrimSpace(*color)
 		}
 		if len(column) == 0 {
-			return handleErr(helpForColumn(), UsageError{Msg: "no fields to update"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "no fields to update"})
 		}
 		payload := map[string]any{"column": column}
 		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/columns/"+args[1])
 		resp, err := ctx.Client.Do(requestContext(), "PUT", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForColumn(), err)
+			return ctx.handleErr(helpForColumn(), err)
 		}
 		return outputNoContent(ctx, resp, "Column updated")
 	case "delete":
 		if len(args) < 2 {
-			return handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
 		}
 		fs := flag.NewFlagSet("column delete", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		boardID := fs.String("board-id", "", "Board ID")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForColumn(), err)
+			return ctx.usageError(helpForColumn(), err)
 		}
 		if strings.TrimSpace(*boardID) == "" {
-			return handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
 		}
 		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/columns/"+args[1])
 		resp, err := ctx.Client.Do(requestContext(), "DELETE", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForColumn(), err)
+			return ctx.handleErr(helpForColumn(), err)
 		}
 		return outputNoContent(ctx, resp, "Column deleted")
 	default:
-		fmt.Fprint(os.Stderr, helpForColumn())
+		fmt.Fprint(ctx.Stderr, helpForColumn())
 		return 2
 	}
 }
 
 func runUser(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForUser())
+		fmt.Fprint(ctx.Stderr, helpForUser())
 		return 2
 	}
 	if err := ensureToken(ctx); err != nil {
-		return handleErr(helpForUser(), err)
+		return ctx.handleErr(helpForUser(), err)
 	}
 	if err := ensureAccount(ctx); err != nil {
-		return handleErr(helpForUser(), err)
+		return ctx.handleErr(helpForUser(), err)
 	}
 	switch args[0] {
 	case "list":
 		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/users"), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForUser(), err)
+			return ctx.handleErr(helpForUser(), err)
 		}
 		return outputListOrJSON(ctx, resp, userListHeaders, userListRows)
 	case "get":
 		if len(args) < 2 {
-			return handleErr(helpForUser(), UsageError{Msg: "user id is required"})
+			return ctx.handleErr(helpForUser(), UsageError{Msg: "user id is required"})
 		}
 		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/users/"+args[1]), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForUser(), err)
+			return ctx.handleErr(helpForUser(), err)
 		}
 		return outputJSONOrPretty(ctx, resp.Body, formatUser)
 	case "update":
 		if len(args) < 2 {
-			return handleErr(helpForUser(), UsageError{Msg: "user id is required"})
+			return ctx.handleErr(helpForUser(), UsageError{Msg: "user id is required"})
 		}
 		fs := flag.NewFlagSet("user update", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		name := fs.String("name", "", "User name")
 		avatar := fs.String("avatar", "", "Avatar file path")
 		if err := fs.Parse(args[2:]); err != nil {
-			return usageError(helpForUser(), err)
+			return ctx.usageError(helpForUser(), err)
 		}
 		if strings.TrimSpace(*name) == "" && strings.TrimSpace(*avatar) == "" {
-			return handleErr(helpForUser(), UsageError{Msg: "--name or --avatar is required"})
+			return ctx.handleErr(helpForUser(), UsageError{Msg: "--name or --avatar is required"})
 		}
 		path := withAccount(ctx, "/users/"+args[1])
 		if strings.TrimSpace(*avatar) != "" {
 			body, contentType, err := multipartBody("user", map[string][]string{"name": {strings.TrimSpace(*name)}}, "avatar", *avatar)
 			if err != nil {
-				return handleErr(helpForUser(), err)
+				return ctx.handleErr(helpForUser(), err)
 			}
 			resp, err := ctx.Client.Do(requestContext(), "PUT", path, nil, body, contentType, nil)
 			if err != nil {
-				return handleErr(helpForUser(), err)
+				return ctx.handleErr(helpForUser(), err)
 			}
 			return outputNoContent(ctx, resp, "User updated")
 		}
 		payload := map[string]any{"user": map[string]any{"name": strings.TrimSpace(*name)}}
 		resp, err := ctx.Client.Do(requestContext(), "PUT", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
-			return handleErr(helpForUser(), err)
+			return ctx.handleErr(helpForUser(), err)
 		}
 		return outputNoContent(ctx, resp, "User updated")
 	case "deactivate":
 		if len(args) < 2 {
-			return handleErr(helpForUser(), UsageError{Msg: "user id is required"})
+			return ctx.handleErr(helpForUser(), UsageError{Msg: "user id is required"})
 		}
 		resp, err := ctx.Client.Do(requestContext(), "DELETE", withAccount(ctx, "/users/"+args[1]), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForUser(), err)
+			return ctx.handleErr(helpForUser(), err)
 		}
 		return outputNoContent(ctx, resp, "User deactivated")
 	default:
-		fmt.Fprint(os.Stderr, helpForUser())
+		fmt.Fprint(ctx.Stderr, helpForUser())
 		return 2
 	}
 }
 
 func runNotification(ctx Context, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprint(os.Stderr, helpForNotification())
+		fmt.Fprint(ctx.Stderr, helpForNotification())
 		return 2
 	}
 	if err := ensureToken(ctx); err != nil {
-		return handleErr(helpForNotification(), err)
+		return ctx.handleErr(helpForNotification(), err)
 	}
 	if err := ensureAccount(ctx); err != nil {
-		return handleErr(helpForNotification(), err)
+		return ctx.handleErr(helpForNotification(), err)
 	}
 	switch args[0] {
 	case "list":
@@ -983,7 +983,7 @@ func runNotification(ctx Context, args []string) int {
 		fs.SetOutput(io.Discard)
 		unread := fs.Bool("unread", false, "Show only unread")
 		if err := fs.Parse(args[1:]); err != nil {
-			return usageError(helpForNotification(), err)
+			return ctx.usageError(helpForNotification(), err)
 		}
 		query := url.Values{}
 		if *unread {
@@ -991,37 +991,37 @@ func runNotification(ctx Context, args []string) int {
 		}
 		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/notifications"), query, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForNotification(), err)
+			return ctx.handleErr(helpForNotification(), err)
 		}
 		return outputListOrJSON(ctx, resp, notificationListHeaders, notificationListRows)
 	case "read":
 		if len(args) < 2 {
-			return handleErr(helpForNotification(), UsageError{Msg: "notification id is required"})
+			return ctx.handleErr(helpForNotification(), UsageError{Msg: "notification id is required"})
 		}
 		path := withAccount(ctx, "/notifications/"+args[1]+"/reading")
 		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForNotification(), err)
+			return ctx.handleErr(helpForNotification(), err)
 		}
 		return outputNoContent(ctx, resp, "Notification marked read")
 	case "unread":
 		if len(args) < 2 {
-			return handleErr(helpForNotification(), UsageError{Msg: "notification id is required"})
+			return ctx.handleErr(helpForNotification(), UsageError{Msg: "notification id is required"})
 		}
 		path := withAccount(ctx, "/notifications/"+args[1]+"/reading")
 		resp, err := ctx.Client.Do(requestContext(), "DELETE", path, nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForNotification(), err)
+			return ctx.handleErr(helpForNotification(), err)
 		}
 		return outputNoContent(ctx, resp, "Notification marked unread")
 	case "read-all":
 		resp, err := ctx.Client.Do(requestContext(), "POST", withAccount(ctx, "/notifications/bulk_reading"), nil, nil, "", nil)
 		if err != nil {
-			return handleErr(helpForNotification(), err)
+			return ctx.handleErr(helpForNotification(), err)
 		}
 		return outputNoContent(ctx, resp, "Notifications marked read")
 	default:
-		fmt.Fprint(os.Stderr, helpForNotification())
+		fmt.Fprint(ctx.Stderr, helpForNotification())
 		return 2
 	}
 }
@@ -1030,7 +1030,7 @@ func listWithPagination(ctx Context, help string, path string, query url.Values,
 	if !all {
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, query, nil, "", nil)
 		if err != nil {
-			return handleErr(help, err)
+			return ctx.handleErr(help, err)
 		}
 		return outputListOrJSON(ctx, resp, headers, rowFn)
 	}
@@ -1042,11 +1042,11 @@ func listWithPagination(ctx Context, help string, path string, query url.Values,
 		for {
 			resp, err := ctx.Client.Do(requestContext(), "GET", nextPath, nextQuery, nil, "", nil)
 			if err != nil {
-				return handleErr(help, err)
+				return ctx.handleErr(help, err)
 			}
 			var page []json.RawMessage
 			if err := json.Unmarshal(resp.Body, &page); err != nil {
-				return handleErr(help, err)
+				return ctx.handleErr(help, err)
 			}
 			combined = append(combined, page...)
 			next := nextLink(resp.Headers)
@@ -1056,8 +1056,8 @@ func listWithPagination(ctx Context, help string, path string, query url.Values,
 			nextPath = next
 			nextQuery = nil
 		}
-		if err := printJSON(os.Stdout, combined); err != nil {
-			return handleErr(help, err)
+		if err := printJSON(ctx.Stdout, combined); err != nil {
+			return ctx.handleErr(help, err)
 		}
 		return 0
 	}
@@ -1068,17 +1068,17 @@ func listWithPagination(ctx Context, help string, path string, query url.Values,
 	for {
 		resp, err := ctx.Client.Do(requestContext(), "GET", nextPath, nextQuery, nil, "", nil)
 		if err != nil {
-			return handleErr(help, err)
+			return ctx.handleErr(help, err)
 		}
 		rows, err := rowFn(resp.Body)
 		if err != nil {
-			return handleErr(help, err)
+			return ctx.handleErr(help, err)
 		}
 		if !printedHeader {
-			printTable(os.Stdout, headers, rows, ctx.Output.Plain)
+			printTable(ctx.Stdout, headers, rows, ctx.Output.Plain)
 			printedHeader = true
 		} else {
-			printTable(os.Stdout, nil, rows, true)
+			printTable(ctx.Stdout, nil, rows, true)
 		}
 		next := nextLink(resp.Headers)
 		if next == "" {
@@ -1092,12 +1092,12 @@ func listWithPagination(ctx Context, help string, path string, query url.Values,
 
 func simpleCardAction(ctx Context, help string, args []string, name string, method string, suffix string, message string) int {
 	if len(args) < 2 {
-		return handleErr(help, UsageError{Msg: "card number is required"})
+		return ctx.handleErr(help, UsageError{Msg: "card number is required"})
 	}
 	path := withAccount(ctx, "/cards/"+args[1]+suffix)
 	resp, err := ctx.Client.Do(requestContext(), method, path, nil, nil, "", nil)
 	if err != nil {
-		return handleErr(help, err)
+		return ctx.handleErr(help, err)
 	}
 	return outputNoContent(ctx, resp, message)
 }
@@ -1106,20 +1106,20 @@ func configSave(path string, cfg config.Config) error {
 	return config.Save(path, cfg)
 }
 
-func usageError(help string, err error) int {
+func (ctx Context) usageError(help string, err error) int {
 	if errors.Is(err, flag.ErrHelp) {
-		fmt.Fprint(os.Stdout, help)
+		fmt.Fprint(ctx.Stdout, help)
 		return 0
 	}
-	return handleErr(help, UsageError{Msg: err.Error()})
+	return ctx.handleErr(help, UsageError{Msg: err.Error()})
 }
 
-func handleErr(help string, err error) int {
-	printErr(err)
+func (ctx Context) handleErr(help string, err error) int {
+	ctx.printErr(err)
 	var usage UsageError
 	if errors.As(err, &usage) {
-		fmt.Fprint(os.Stderr, "\n")
-		fmt.Fprint(os.Stderr, help)
+		fmt.Fprint(ctx.Stderr, "\n")
+		fmt.Fprint(ctx.Stderr, help)
 	}
 	return exitCode(err)
 }
@@ -1133,34 +1133,34 @@ func outputLocation(ctx Context, resp *api.Response, successMessage string) int 
 	location := resp.Headers.Get("Location")
 	if ctx.Output.JSON {
 		payload := map[string]any{"status": resp.Status, "location": location}
-		if err := printJSON(os.Stdout, payload); err != nil {
-			return handleErr("", err)
+		if err := printJSON(ctx.Stdout, payload); err != nil {
+			return ctx.handleErr("", err)
 		}
 		return 0
 	}
 	if location != "" {
-		fmt.Fprintf(os.Stdout, "%s: %s\n", successMessage, location)
+		fmt.Fprintf(ctx.Stdout, "%s: %s\n", successMessage, location)
 		return 0
 	}
-	fmt.Fprintln(os.Stdout, successMessage+".")
+	fmt.Fprintln(ctx.Stdout, successMessage+".")
 	return 0
 }
 
 func outputNoContent(ctx Context, resp *api.Response, successMessage string) int {
 	if ctx.Output.JSON {
 		payload := map[string]any{"status": resp.Status}
-		if err := printJSON(os.Stdout, payload); err != nil {
-			return handleErr("", err)
+		if err := printJSON(ctx.Stdout, payload); err != nil {
+			return ctx.handleErr("", err)
 		}
 		return 0
 	}
-	fmt.Fprintln(os.Stdout, successMessage+".")
+	fmt.Fprintln(ctx.Stdout, successMessage+".")
 	return 0
 }
 
 func outputListOrJSON(ctx Context, resp *api.Response, headers []string, rowFn func([]byte) ([][]string, error)) int {
 	if ctx.Output.JSON {
-		return printJSONResponse(resp)
+		return ctx.printJSONResponse(resp)
 	}
 	return outputListRows(ctx, resp.Body, headers, rowFn)
 }
@@ -1168,37 +1168,37 @@ func outputListOrJSON(ctx Context, resp *api.Response, headers []string, rowFn f
 func outputListRows(ctx Context, body []byte, headers []string, rowFn func([]byte) ([][]string, error)) int {
 	rows, err := rowFn(body)
 	if err != nil {
-		return handleErr("", err)
+		return ctx.handleErr("", err)
 	}
-	printTable(os.Stdout, headers, rows, ctx.Output.Plain)
+	printTable(ctx.Stdout, headers, rows, ctx.Output.Plain)
 	return 0
 }
 
 func outputJSONOrPretty(ctx Context, body []byte, formatFn func([]byte) (string, error)) int {
 	if ctx.Output.JSON {
-		if err := printJSONBytes(os.Stdout, body); err != nil {
-			return handleErr("", err)
+		if err := printJSONBytes(ctx.Stdout, body); err != nil {
+			return ctx.handleErr("", err)
 		}
 		return 0
 	}
 	text, err := formatFn(body)
 	if err != nil {
-		return handleErr("", err)
+		return ctx.handleErr("", err)
 	}
-	fmt.Fprintln(os.Stdout, text)
+	fmt.Fprintln(ctx.Stdout, text)
 	return 0
 }
 
-func printJSONResponse(resp *api.Response) int {
+func (ctx Context) printJSONResponse(resp *api.Response) int {
 	if len(resp.Body) == 0 {
 		payload := map[string]any{"status": resp.Status}
-		if err := printJSON(os.Stdout, payload); err != nil {
-			return handleErr("", err)
+		if err := printJSON(ctx.Stdout, payload); err != nil {
+			return ctx.handleErr("", err)
 		}
 		return 0
 	}
-	if err := printJSONBytes(os.Stdout, resp.Body); err != nil {
-		return handleErr("", err)
+	if err := printJSONBytes(ctx.Stdout, resp.Body); err != nil {
+		return ctx.handleErr("", err)
 	}
 	return 0
 }
@@ -1244,9 +1244,9 @@ func nextLink(headers map[string][]string) string {
 	return ""
 }
 
-func readSecret(label string) (string, error) {
+func readSecret(ctx Context, label string) (string, error) {
 	if isTTY(os.Stdin) {
-		fmt.Fprintf(os.Stderr, "%s: ", label)
+		fmt.Fprintf(ctx.Stderr, "%s: ", label)
 		reader := bufio.NewReader(os.Stdin)
 		text, err := reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {

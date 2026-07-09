@@ -5,24 +5,25 @@
 - `internal/cli/` holds command parsing, help text, output formatting, and command implementations.
 - `internal/api/` contains the HTTP client used to talk to the Fizzy API.
 - `internal/config/` handles config loading/saving (`config.json`).
-- `docs/` contains product docs such as `API.md` and CLI requirements.
+- API reference and CLI conventions live in the Fizzy backend repository; this repo tracks them via help text in `internal/cli/help.go`.
 
 ## Build, Test, and Development Commands
 - `go build ./...` builds the CLI binary and all packages.
 - `GOCACHE=/path/to/.gocache go build ./...` is useful if the default Go cache path is restricted.
-- `go test ./...` runs all Go tests (none currently exist).
+- `go test -race ./...` runs all Go tests.
 - `gofmt -w cmd/fizzy-cli/*.go internal/**/*.go` formats Go sources.
 
 ## Coding Style & Naming Conventions
 - Go formatting: use `gofmt` (tabs, standard Go style).
 - Packages use short, lowercase names (`cli`, `api`, `config`).
-- Commands and flags follow CLI conventions from `docs/cli-guidelines.md` (e.g., `--json`, `--plain`, `--help`).
+- Commands and flags follow common CLI conventions (e.g., `--json`, `--plain`, `--help`).
 - Keep help text and usage in `internal/cli/help.go` and command logic in `internal/cli/commands.go`.
 
 ## Testing Guidelines
-- No test framework or test files are present yet.
-- When adding tests, follow Go conventions: `*_test.go` files and `TestXxx` functions.
-- Recommended command: `go test ./...`.
+- Tests use only the Go standard library (no third-party test frameworks).
+- Follow Go conventions: `*_test.go` files and `TestXxx` functions.
+- CLI command tests run through the real `cli.Run` entrypoint against an `httptest.Server`; see `internal/cli/harness_test.go`.
+- Recommended command: `go test -race ./...`.
 
 ## Commit & Pull Request Guidelines
 - This repository is not a git repo, so there are no established commit conventions.

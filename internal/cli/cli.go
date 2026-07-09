@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -28,6 +29,8 @@ type Context struct {
 	Version      string
 	Commit       string
 	BuildDate    string
+	Stdout       io.Writer
+	Stderr       io.Writer
 }
 
 type UsageError struct {
@@ -36,18 +39,20 @@ type UsageError struct {
 
 func (e UsageError) Error() string { return e.Msg }
 
-func Run(version, commit, buildDate string, args []string) int {
-	ctx, rest, showHelp, showVersion, err := parseGlobal(args)
+func Run(stdout, stderr io.Writer, version, commit, buildDate string, args []string) int {
+	ctx, rest, showHelp, showVersion, err := parseGlobal(stderr, args)
+	ctx.Stdout = stdout
+	ctx.Stderr = stderr
 	if err != nil {
-		printErr(err)
+		ctx.printErr(err)
 		return exitCode(err)
 	}
 	if showVersion {
-		fmt.Fprintf(os.Stdout, "fizzy-cli %s (%s) %s\n", version, commit, buildDate)
+		fmt.Fprintf(stdout, "fizzy-cli %s (%s) %s\n", version, commit, buildDate)
 		return 0
 	}
 	if showHelp || len(rest) == 0 {
-		fmt.Fprint(os.Stdout, rootHelp)
+		fmt.Fprint(stdout, rootHelp)
 		return 0
 	}
 
@@ -59,10 +64,10 @@ func Run(version, commit, buildDate string, args []string) int {
 	switch rest[0] {
 	case "help":
 		if len(rest) > 1 {
-			fmt.Fprint(os.Stdout, helpForCommand(rest[1]))
+			fmt.Fprint(stdout, helpForCommand(rest[1]))
 			return 0
 		}
-		fmt.Fprint(os.Stdout, rootHelp)
+		fmt.Fprint(stdout, rootHelp)
 		return 0
 	case "auth":
 		return runAuth(ctx, rest[1:])
@@ -85,14 +90,14 @@ func Run(version, commit, buildDate string, args []string) int {
 	case "notification":
 		return runNotification(ctx, rest[1:])
 	default:
-		printErr(UsageError{Msg: fmt.Sprintf("unknown command %q", rest[0])})
-		fmt.Fprint(os.Stderr, "\n")
-		fmt.Fprint(os.Stderr, rootHelp)
+		ctx.printErr(UsageError{Msg: fmt.Sprintf("unknown command %q", rest[0])})
+		fmt.Fprint(stderr, "\n")
+		fmt.Fprint(stderr, rootHelp)
 		return 2
 	}
 }
 
-func parseGlobal(args []string) (Context, []string, bool, bool, error) {
+func parseGlobal(stderr io.Writer, args []string) (Context, []string, bool, bool, error) {
 	var ctx Context
 	if len(args) == 0 {
 		return ctx, nil, true, false, nil
@@ -108,7 +113,7 @@ func parseGlobal(args []string) (Context, []string, bool, bool, error) {
 	}
 
 	fs := flag.NewFlagSet("fizzy-cli", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
+	fs.SetOutput(stderr)
 
 	var (
 		flagBaseURL string
@@ -175,11 +180,11 @@ func normalizeAccount(value string) string {
 	return strings.Trim(value, "/")
 }
 
-func printErr(err error) {
+func (ctx Context) printErr(err error) {
 	if err == nil {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "error: %s\n", err.Error())
+	fmt.Fprintf(ctx.Stderr, "error: %s\n", err.Error())
 }
 
 func exitCode(err error) int {

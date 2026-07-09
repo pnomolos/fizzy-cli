@@ -19,6 +19,7 @@ var (
 	stepListHeaders         = []string{"ID", "DONE", "CONTENT"}
 	reactionListHeaders     = []string{"ID", "CONTENT", "REACTER"}
 	activityListHeaders     = []string{"TIME", "ACTION", "DESCRIPTION", "CARD", "BOARD", "CREATOR"}
+	boardAccessListHeaders  = []string{"USER", "ROLE", "HAS_ACCESS", "INVOLVEMENT"}
 )
 
 type board struct {
@@ -154,6 +155,22 @@ type joinCode struct {
 	UsageLimit int    `json:"usage_limit"`
 	URL        string `json:"url"`
 	Active     bool   `json:"active"`
+}
+
+// boardAccessUser is a user entry as returned by GET .../boards/:id/accesses,
+// which augments the plain user fields with board-specific access info.
+type boardAccessUser struct {
+	user
+	HasAccess   bool   `json:"has_access"`
+	Involvement string `json:"involvement"`
+}
+
+// boardAccesses is the object shape returned by GET .../boards/:id/accesses
+// (not a bare array).
+type boardAccesses struct {
+	BoardID   string            `json:"board_id"`
+	AllAccess bool              `json:"all_access"`
+	Users     []boardAccessUser `json:"users"`
 }
 
 type identity struct {
@@ -345,6 +362,18 @@ func activityListRows(body []byte) ([][]string, error) {
 			}
 		}
 		rows = append(rows, []string{a.CreatedAt, a.Action, stripHTML(a.Description), cardNumber, a.Board.Name, a.Creator.Name})
+	}
+	return rows, nil
+}
+
+func boardAccessListRows(body []byte) ([][]string, error) {
+	var ba boardAccesses
+	if err := json.Unmarshal(body, &ba); err != nil {
+		return nil, err
+	}
+	rows := make([][]string, 0, len(ba.Users))
+	for _, u := range ba.Users {
+		rows = append(rows, []string{u.Name, u.Role, fmt.Sprintf("%t", u.HasAccess), u.Involvement})
 	}
 	return rows, nil
 }

@@ -1206,3 +1206,74 @@ func TestAccountJoinCodeReset(t *testing.T) {
 	}
 	assertRequest(t, h.lastRequest(), "DELETE", "/acme/account/join_code")
 }
+
+func TestBoardPublish(t *testing.T) {
+	h := newHarness(t)
+	body := `{"id":"b1","name":"Roadmap","all_access":true,"created_at":"2024-01-02","creator":{"name":"Ada"},"url":"https://app/x"}`
+	h.route("POST", "/acme/boards/b1/publication", stub{Status: 201, Body: body})
+
+	res := h.run("board", "publish", "b1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Name: Roadmap") {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/boards/b1/publication")
+}
+
+func TestBoardUnpublish(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/acme/boards/b1/publication", stub{Status: 204})
+
+	res := h.run("board", "unpublish", "b1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Board unpublished.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/boards/b1/publication")
+}
+
+func TestBoardAccesses(t *testing.T) {
+	h := newHarness(t)
+	body := `{"board_id":"b1","all_access":true,"users":[{"id":"u1","name":"Ada","role":"admin","has_access":true,"involvement":"watching"},{"id":"u2","name":"Bob","role":"member","has_access":false,"involvement":"access_only"}]}`
+	h.route("GET", "/acme/boards/b1/accesses", stub{Status: 200, Body: body})
+
+	res := h.run("board", "accesses", "b1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Ada") || !strings.Contains(res.stdout, "watching") || !strings.Contains(res.stdout, "Bob") {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/boards/b1/accesses")
+}
+
+func TestBoardWatchUnwatch(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/boards/b1/involvement", stub{Status: 204})
+
+	res := h.run("board", "watch", "b1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Now watching board.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/boards/b1/involvement")
+	assertJSONBody(t, rec, map[string]any{"involvement": "watching"})
+
+	res = h.run("board", "unwatch", "b1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Stopped watching board.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec = h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/boards/b1/involvement")
+	assertJSONBody(t, rec, map[string]any{"involvement": "access_only"})
+}

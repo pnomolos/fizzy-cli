@@ -102,6 +102,11 @@ func helpForBoard() string {
   fizzy-cli board create --name <name> [--all-access] [--public-description TEXT]
   fizzy-cli board update <board-id> [--name <name>] [--all-access] [--no-all-access] [--public-description TEXT] [--user-id ID ...]
   fizzy-cli board delete <board-id>
+  fizzy-cli board publish <board-id>
+  fizzy-cli board unpublish <board-id>
+  fizzy-cli board accesses <board-id>
+  fizzy-cli board watch <board-id>
+  fizzy-cli board unwatch <board-id>
 `
 }
 

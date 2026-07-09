@@ -1375,3 +1375,184 @@ func TestColumnMoveDirectionMutuallyExclusive(t *testing.T) {
 		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
 	}
 }
+
+const webhooksFixture = `[{"id":"w1","name":"CI hook","active":true,"payload_url":"https://ci.example/hook","subscribed_actions":["card_published"]},{"id":"w2","name":"Slack","active":false,"payload_url":"https://slack.example/hook","subscribed_actions":["comment_created"]}]`
+
+const webhookFixture = `{"id":"w1","name":"CI hook","active":true,"signing_secret":"sek","subscribed_actions":["card_published","comment_created"],"payload_url":"https://ci.example/hook","created_at":"2024-09-01"}`
+
+func TestWebhookList(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/boards/b1/webhooks", stub{Status: 200, Body: webhooksFixture})
+
+	res := h.run("webhook", "list", "--board-id", "b1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID  NAME     ACTIVE  URL\n" +
+		"w1  CI hook  true    https://ci.example/hook\n" +
+		"w2  Slack    false   https://slack.example/hook\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/boards/b1/webhooks")
+}
+
+func TestWebhookListRequiresBoard(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("webhook", "list")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestWebhookGet(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/boards/b1/webhooks/w1", stub{Status: 200, Body: webhookFixture})
+
+	res := h.run("webhook", "get", "--board-id", "b1", "w1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID: w1\nName: CI hook\nActive: true\nURL: https://ci.example/hook\n" +
+		"Signing secret: sek\nSubscribed actions: card_published, comment_created\nCreated: 2024-09-01\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/boards/b1/webhooks/w1")
+}
+
+func TestWebhookCreate(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/boards/b1/webhooks", stub{Status: 201, Body: webhookFixture})
+
+	res := h.run("webhook", "create", "--board-id", "b1", "--name", "CI hook", "--url", "https://ci.example/hook", "--event", "card_published", "--event", "comment_created")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "POST", "/acme/boards/b1/webhooks")
+	assertJSONBody(t, rec, map[string]any{"webhook": map[string]any{
+		"name":               "CI hook",
+		"url":                "https://ci.example/hook",
+		"subscribed_actions": []any{"card_published", "comment_created"},
+	}})
+}
+
+func TestWebhookCreateRequiresEvent(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("webhook", "create", "--board-id", "b1", "--name", "CI", "--url", "https://x/y")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "at least one --event") {
+		t.Errorf("stderr = %q", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestWebhookCreateRejectsInvalidEvent(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("webhook", "create", "--board-id", "b1", "--name", "CI", "--url", "https://x/y", "--event", "card_exploded")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "unknown webhook event") {
+		t.Errorf("stderr = %q, want unknown-event error", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestWebhookUpdate(t *testing.T) {
+	h := newHarness(t)
+	h.route("PATCH", "/acme/boards/b1/webhooks/w1", stub{Status: 200, Body: webhookFixture})
+
+	res := h.run("webhook", "update", "--board-id", "b1", "w1", "--name", "Renamed", "--event", "card_closed")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PATCH", "/acme/boards/b1/webhooks/w1")
+	assertJSONBody(t, rec, map[string]any{"webhook": map[string]any{
+		"name":               "Renamed",
+		"subscribed_actions": []any{"card_closed"},
+	}})
+}
+
+func TestWebhookUpdateRejectsURL(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("webhook", "update", "--board-id", "b1", "w1", "--url", "https://new/url")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "immutable") {
+		t.Errorf("stderr = %q, want immutable error", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestWebhookDelete(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/acme/boards/b1/webhooks/w1", stub{Status: 204})
+
+	res := h.run("webhook", "delete", "--board-id", "b1", "w1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Webhook deleted.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/boards/b1/webhooks/w1")
+}
+
+func TestWebhookActivate(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/boards/b1/webhooks/w1/activation", stub{Status: 201, Body: webhookFixture})
+
+	res := h.run("webhook", "activate", "--board-id", "b1", "w1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/boards/b1/webhooks/w1/activation")
+	if !strings.Contains(res.stdout, "ID: w1") {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+}
+
+func TestWebhookDeliveries(t *testing.T) {
+	h := newHarness(t)
+	body := `[{"id":"d1","status":"delivered","response_code":200,"created_at":"2024-09-02"}]`
+	h.route("GET", "/acme/boards/b1/webhooks/w1/deliveries", stub{Status: 200, Body: body})
+
+	res := h.run("webhook", "deliveries", "--board-id", "b1", "w1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID  CREATED_AT  RESPONSE_CODE  STATUS\n" +
+		"d1  2024-09-02  200            delivered\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/boards/b1/webhooks/w1/deliveries")
+}
+
+func TestWebhookDeliveriesEmpty(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/boards/b1/webhooks/w1/deliveries", stub{Status: 200, Body: `[]`})
+
+	res := h.run("webhook", "deliveries", "--board-id", "b1", "w1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "" {
+		t.Errorf("stdout = %q, want empty", res.stdout)
+	}
+}

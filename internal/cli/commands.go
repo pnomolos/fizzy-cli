@@ -1698,6 +1698,273 @@ func runSearch(ctx Context, args []string) int {
 	return listWithPagination(ctx, helpForSearch(), withAccount(ctx, "/search"), query, *all, cardListHeaders, cardListRows)
 }
 
+// validWebhookActions is the server's PERMITTED_ACTIONS list for webhook
+// subscriptions. Unknown actions are silently dropped server-side, so the CLI
+// validates against this list client-side.
+var validWebhookActions = []string{
+	"card_assigned",
+	"card_closed",
+	"card_postponed",
+	"card_auto_postponed",
+	"card_board_changed",
+	"card_published",
+	"card_reopened",
+	"card_sent_back_to_triage",
+	"card_triaged",
+	"card_unassigned",
+	"comment_created",
+}
+
+// webhookValueFlags are the value-taking flags on webhook subcommands, used by
+// reorderFlagArgs so a positional webhook id may appear between flags (e.g.
+// `webhook update --board-id ID <id> --name X`).
+var webhookValueFlags = map[string]bool{
+	"board-id": true,
+	"name":     true,
+	"url":      true,
+	"event":    true,
+}
+
+var validWebhookActionSet = func() map[string]bool {
+	m := make(map[string]bool, len(validWebhookActions))
+	for _, a := range validWebhookActions {
+		m[a] = true
+	}
+	return m
+}()
+
+// validateWebhookActions returns an error naming the offending value (and the
+// full valid list) when any supplied action is not permitted.
+func validateWebhookActions(actions []string) error {
+	for _, a := range actions {
+		if !validWebhookActionSet[a] {
+			return UsageError{Msg: fmt.Sprintf("unknown webhook event %q; valid events: %s", a, strings.Join(validWebhookActions, ", "))}
+		}
+	}
+	return nil
+}
+
+func runWebhook(ctx Context, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(ctx.Stderr, helpForWebhook())
+		return 2
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForWebhook(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForWebhook(), err)
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("webhook list", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardID := fs.String("board-id", "", "Board ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return ctx.usageError(helpForWebhook(), err)
+		}
+		if strings.TrimSpace(*boardID) == "" {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "--board-id is required"})
+		}
+		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/webhooks")
+		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		return outputListOrJSON(ctx, resp, webhookListHeaders, webhookListRows)
+	case "get":
+		boardID, id, code, ok := webhookBoardAndID(ctx, args[1:])
+		if !ok {
+			return code
+		}
+		path := withAccount(ctx, "/boards/"+boardID+"/webhooks/"+id)
+		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatWebhook)
+	case "create":
+		fs := flag.NewFlagSet("webhook create", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardID := fs.String("board-id", "", "Board ID")
+		name := fs.String("name", "", "Webhook name")
+		urlFlag := fs.String("url", "", "Payload URL")
+		events := multiString{}
+		fs.Var(&events, "event", "Subscribed action (repeatable)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return ctx.usageError(helpForWebhook(), err)
+		}
+		if strings.TrimSpace(*boardID) == "" {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "--board-id is required"})
+		}
+		if strings.TrimSpace(*name) == "" || strings.TrimSpace(*urlFlag) == "" {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "--name and --url are required"})
+		}
+		if len(events.values) == 0 {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "at least one --event is required; valid events: " + strings.Join(validWebhookActions, ", ")})
+		}
+		if err := validateWebhookActions(events.values); err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		payload := map[string]any{"webhook": map[string]any{
+			"name":               strings.TrimSpace(*name),
+			"url":                strings.TrimSpace(*urlFlag),
+			"subscribed_actions": events.values,
+		}}
+		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/webhooks")
+		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatWebhook)
+	case "update":
+		fs := flag.NewFlagSet("webhook update", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardIDFlag := fs.String("board-id", "", "Board ID")
+		name := fs.String("name", "", "Webhook name")
+		urlFlag := fs.String("url", "", "Payload URL (immutable; rejected)")
+		events := multiString{}
+		fs.Var(&events, "event", "Subscribed action (repeatable)")
+		if err := fs.Parse(reorderFlagArgs(args[1:], webhookValueFlags)); err != nil {
+			return ctx.usageError(helpForWebhook(), err)
+		}
+		boardID := strings.TrimSpace(*boardIDFlag)
+		if boardID == "" {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "--board-id is required"})
+		}
+		rest := fs.Args()
+		if len(rest) < 1 {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "webhook id is required"})
+		}
+		id := rest[0]
+		if strings.TrimSpace(*urlFlag) != "" {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "--url is immutable and cannot be changed; recreate the webhook to change its URL"})
+		}
+		webhookFields := map[string]any{}
+		if strings.TrimSpace(*name) != "" {
+			webhookFields["name"] = strings.TrimSpace(*name)
+		}
+		if len(events.values) > 0 {
+			if err := validateWebhookActions(events.values); err != nil {
+				return ctx.handleErr(helpForWebhook(), err)
+			}
+			webhookFields["subscribed_actions"] = events.values
+		}
+		if len(webhookFields) == 0 {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "no fields to update"})
+		}
+		payload := map[string]any{"webhook": webhookFields}
+		path := withAccount(ctx, "/boards/"+boardID+"/webhooks/"+id)
+		resp, err := ctx.Client.Do(requestContext(), "PATCH", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatWebhook)
+	case "delete":
+		boardID, id, code, ok := webhookBoardAndID(ctx, args[1:])
+		if !ok {
+			return code
+		}
+		path := withAccount(ctx, "/boards/"+boardID+"/webhooks/"+id)
+		resp, err := ctx.Client.Do(requestContext(), "DELETE", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		return outputNoContent(ctx, resp, "Webhook deleted")
+	case "activate":
+		boardID, id, code, ok := webhookBoardAndID(ctx, args[1:])
+		if !ok {
+			return code
+		}
+		path := withAccount(ctx, "/boards/"+boardID+"/webhooks/"+id+"/activation")
+		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatWebhook)
+	case "deliveries":
+		fs := flag.NewFlagSet("webhook deliveries", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardID := fs.String("board-id", "", "Board ID")
+		all := fs.Bool("all", false, "Fetch all pages")
+		if err := fs.Parse(reorderFlagArgs(args[1:], webhookValueFlags)); err != nil {
+			return ctx.usageError(helpForWebhook(), err)
+		}
+		if strings.TrimSpace(*boardID) == "" {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "--board-id is required"})
+		}
+		rest := fs.Args()
+		if len(rest) < 1 {
+			return ctx.handleErr(helpForWebhook(), UsageError{Msg: "webhook id is required"})
+		}
+		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/webhooks/"+rest[0]+"/deliveries")
+		return webhookDeliveries(ctx, path, *all)
+	default:
+		fmt.Fprint(ctx.Stderr, helpForWebhook())
+		return 2
+	}
+}
+
+// webhookBoardAndID extracts the required --board-id flag and positional
+// webhook id shared by several webhook subcommands. On error it prints usage
+// and returns ok=false with the exit code to propagate.
+func webhookBoardAndID(ctx Context, args []string) (boardID, id string, code int, ok bool) {
+	fs := flag.NewFlagSet("webhook", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	board := fs.String("board-id", "", "Board ID")
+	if err := fs.Parse(reorderFlagArgs(args, webhookValueFlags)); err != nil {
+		return "", "", ctx.usageError(helpForWebhook(), err), false
+	}
+	if strings.TrimSpace(*board) == "" {
+		return "", "", ctx.handleErr(helpForWebhook(), UsageError{Msg: "--board-id is required"}), false
+	}
+	rest := fs.Args()
+	if len(rest) < 1 {
+		return "", "", ctx.handleErr(helpForWebhook(), UsageError{Msg: "webhook id is required"}), false
+	}
+	return strings.TrimSpace(*board), rest[0], 0, true
+}
+
+// webhookDeliveries fetches (optionally paginating) the delivery log for a
+// webhook and renders it. The delivery shape is undocumented, so table columns
+// are derived dynamically from the returned JSON keys.
+func webhookDeliveries(ctx Context, path string, all bool) int {
+	combined := []json.RawMessage{}
+	nextPath := path
+	for {
+		resp, err := ctx.Client.Do(requestContext(), "GET", nextPath, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		var page []json.RawMessage
+		if err := json.Unmarshal(resp.Body, &page); err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		combined = append(combined, page...)
+		next := nextLink(resp.Headers)
+		if !all || next == "" {
+			break
+		}
+		nextPath = next
+	}
+	body, err := json.Marshal(combined)
+	if err != nil {
+		return ctx.handleErr(helpForWebhook(), err)
+	}
+	if ctx.Output.JSON {
+		if err := printJSON(ctx.Stdout, combined); err != nil {
+			return ctx.handleErr(helpForWebhook(), err)
+		}
+		return 0
+	}
+	headers, rows, err := webhookDeliveryRows(body)
+	if err != nil {
+		return ctx.handleErr(helpForWebhook(), err)
+	}
+	printTable(ctx.Stdout, headers, rows, ctx.Output.Plain)
+	return 0
+}
+
 func listWithPagination(ctx Context, help string, path string, query url.Values, all bool, headers []string, rowFn func([]byte) ([][]string, error)) int {
 	if !all {
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, query, nil, "", nil)

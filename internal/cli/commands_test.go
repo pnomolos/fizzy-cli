@@ -237,6 +237,68 @@ func TestCommentCreate(t *testing.T) {
 	assertJSONBody(t, rec, map[string]any{"comment": map[string]any{"body": "Hello there"}})
 }
 
+const notificationsFixture = `[{"id":"n1","read":false,"title":"Assigned","card":{"title":"Fix login"},"created_at":"2024-07-01"},{"id":"n2","read":true,"title":"Mentioned","card":{"title":"Add search"},"created_at":"2024-07-02"}]`
+
+func TestCardListColumnIDFilter(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/cards", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("card", "list", "--column-id", "col1", "--column-id", "col2")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "GET", "/acme/cards")
+	q, err := url.ParseQuery(rec.RawQuery)
+	if err != nil {
+		t.Fatalf("parse query: %v", err)
+	}
+	if ids := q["column_ids[]"]; !reflect.DeepEqual(ids, []string{"col1", "col2"}) {
+		t.Errorf("column_ids[] = %v, want [col1 col2]", ids)
+	}
+}
+
+func TestNotificationListUnreadFilters(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/notifications", stub{Status: 200, Body: notificationsFixture})
+
+	res := h.run("notification", "list", "--unread")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Assigned") {
+		t.Errorf("unread item missing from output: %q", res.stdout)
+	}
+	if strings.Contains(res.stdout, "Mentioned") {
+		t.Errorf("read item should be filtered out: %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "GET", "/acme/notifications")
+	if rec.RawQuery != "" {
+		t.Errorf("expected no query params (no server unread filter), got %q", rec.RawQuery)
+	}
+}
+
+func TestNotificationListUnreadJSON(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/notifications", stub{Status: 200, Body: notificationsFixture})
+
+	res := h.run("--json", "notification", "list", "--unread")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+		t.Fatalf("stdout not JSON array: %v (%q)", err, res.stdout)
+	}
+	if len(got) != 1 {
+		t.Fatalf("filtered length = %d, want 1", len(got))
+	}
+	if got[0]["id"] != "n1" {
+		t.Errorf("kept id = %v, want n1", got[0]["id"])
+	}
+}
+
 func TestNotificationRead(t *testing.T) {
 	h := newHarness(t)
 	h.route("POST", "/acme/notifications/3/reading", stub{Status: 201})

@@ -104,6 +104,7 @@ func helpForCard() string {
 FILTERS:
   --board-id ID           repeatable
   --tag-id ID             repeatable
+  --column-id ID          repeatable
   --assignee-id ID        repeatable
   --creator-id ID         repeatable
   --closer-id ID          repeatable

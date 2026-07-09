@@ -399,6 +399,7 @@ func runCard(ctx Context, args []string) int {
 		fs.SetOutput(io.Discard)
 		boardIDs := multiString{}
 		tagIDs := multiString{}
+		columnIDs := multiString{}
 		assigneeIDs := multiString{}
 		creatorIDs := multiString{}
 		closerIDs := multiString{}
@@ -412,6 +413,7 @@ func runCard(ctx Context, args []string) int {
 		all := fs.Bool("all", false, "Fetch all pages")
 		fs.Var(&boardIDs, "board-id", "Board ID filter")
 		fs.Var(&tagIDs, "tag-id", "Tag ID filter")
+		fs.Var(&columnIDs, "column-id", "Column ID filter")
 		fs.Var(&assigneeIDs, "assignee-id", "Assignee ID filter")
 		fs.Var(&creatorIDs, "creator-id", "Creator ID filter")
 		fs.Var(&closerIDs, "closer-id", "Closer ID filter")
@@ -423,6 +425,7 @@ func runCard(ctx Context, args []string) int {
 		query := url.Values{}
 		addListParam(query, "board_ids[]", boardIDs.values)
 		addListParam(query, "tag_ids[]", tagIDs.values)
+		addListParam(query, "column_ids[]", columnIDs.values)
 		addListParam(query, "assignee_ids[]", assigneeIDs.values)
 		addListParam(query, "creator_ids[]", creatorIDs.values)
 		addListParam(query, "closer_ids[]", closerIDs.values)
@@ -982,13 +985,17 @@ func runNotification(ctx Context, args []string) int {
 		if err := fs.Parse(args[1:]); err != nil {
 			return ctx.usageError(helpForNotification(), err)
 		}
-		query := url.Values{}
-		if *unread {
-			query.Set("unread", "true")
-		}
-		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/notifications"), query, nil, "", nil)
+		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/notifications"), nil, nil, "", nil)
 		if err != nil {
 			return ctx.handleErr(helpForNotification(), err)
+		}
+		if *unread {
+			// The server has no unread filter, so drop read items client-side.
+			filtered, err := filterUnreadNotifications(resp.Body)
+			if err != nil {
+				return ctx.handleErr(helpForNotification(), err)
+			}
+			resp.Body = filtered
 		}
 		return outputListOrJSON(ctx, resp, notificationListHeaders, notificationListRows)
 	case "read":
@@ -1085,6 +1092,28 @@ func listWithPagination(ctx Context, help string, path string, query url.Values,
 		nextQuery = nil
 	}
 	return 0
+}
+
+// filterUnreadNotifications returns a JSON array containing only the items whose
+// "read" field is false, preserving each item's original fields.
+func filterUnreadNotifications(body []byte) ([]byte, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(body, &items); err != nil {
+		return nil, err
+	}
+	filtered := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		var meta struct {
+			Read bool `json:"read"`
+		}
+		if err := json.Unmarshal(item, &meta); err != nil {
+			return nil, err
+		}
+		if !meta.Read {
+			filtered = append(filtered, item)
+		}
+	}
+	return json.Marshal(filtered)
 }
 
 // cardNumberFromLocation extracts the card number from a create response

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +24,7 @@ type Context struct {
 	Token        string
 	SessionToken string
 	Output       OutputMode
+	NoColor      bool
 	Client       *api.Client
 	Version      string
 	Commit       string
@@ -51,7 +51,15 @@ func Run(stdout, stderr io.Writer, version, commit, buildDate string, args []str
 		fmt.Fprintf(stdout, "fizzy-cli %s (%s) %s\n", version, commit, buildDate)
 		return 0
 	}
-	if showHelp || len(rest) == 0 {
+	if showHelp {
+		if len(rest) > 0 {
+			fmt.Fprint(stdout, helpForCommand(rest[0]))
+			return 0
+		}
+		fmt.Fprint(stdout, rootHelp)
+		return 0
+	}
+	if len(rest) == 0 {
 		fmt.Fprint(stdout, rootHelp)
 		return 0
 	}
@@ -97,6 +105,189 @@ func Run(stdout, stderr io.Writer, version, commit, buildDate string, args []str
 	}
 }
 
+// globalBoolFlags are the boolean global flags recognised in any position.
+var globalBoolFlags = map[string]bool{
+	"json":     true,
+	"plain":    true,
+	"no-color": true,
+	"help":     true,
+	"h":        true,
+	"version":  true,
+}
+
+// globalValueFlags are the value-taking global flags recognised in any position.
+var globalValueFlags = map[string]bool{
+	"base-url": true,
+	"token":    true,
+	"account":  true,
+	"config":   true,
+}
+
+// commandOwnedFlags lists flags that a given command owns and that must NOT be
+// hijacked as global flags when they appear at or after that command's token
+// (e.g. `config set --account X`, `auth login --token X`).
+var commandOwnedFlags = map[string]map[string]bool{
+	"config": {"base-url": true, "account": true},
+	"auth":   {"token": true},
+}
+
+// globalFlagValues holds the extracted global flag settings.
+type globalFlagValues struct {
+	baseURL string
+	token   string
+	account string
+	config  string
+	json    bool
+	plain   bool
+	noColor bool
+	help    bool
+	version bool
+}
+
+// splitFlagToken breaks a "--name" / "--name=value" / "-h" token into its flag
+// name and (optional) inline value. It returns ok=false for non-flag tokens.
+func splitFlagToken(tok string) (name, value string, hasValue, ok bool) {
+	if len(tok) < 2 || tok[0] != '-' || tok == "--" {
+		return "", "", false, false
+	}
+	trimmed := strings.TrimLeft(tok, "-")
+	if trimmed == "" {
+		return "", "", false, false
+	}
+	if idx := strings.IndexByte(trimmed, '='); idx >= 0 {
+		return trimmed[:idx], trimmed[idx+1:], true, true
+	}
+	return trimmed, "", false, true
+}
+
+// extractGlobalFlags scans args (excluding the program name) left to right,
+// pulling out recognised global flags wherever they appear and returning the
+// remaining tokens for subcommand dispatch. Flags owned by the target command
+// (see commandOwnedFlags) are left untouched so subcommands keep parsing them.
+func extractGlobalFlags(args []string) (globalFlagValues, []string, error) {
+	var g globalFlagValues
+	rest := make([]string, 0, len(args))
+	command := ""
+	// prevWasSubcmdFlag is true when the previous token we passed through to
+	// rest was a subcommand flag (a dash token that isn't a global flag). The
+	// token after such a flag may be its value, so we must not mistake a value
+	// that happens to look like a global value flag (e.g. `--description
+	// --account`) for a real global flag and greedily consume it.
+	prevWasSubcmdFlag := false
+
+	i := 0
+	for i < len(args) {
+		tok := args[i]
+
+		// A bare "--" ends flag parsing. At the top level it is just a
+		// terminator to drop; once we're inside a subcommand, pass it (and the
+		// rest) through so the subcommand's own parser treats it as such.
+		if tok == "--" {
+			if command == "" {
+				rest = append(rest, args[i+1:]...)
+			} else {
+				rest = append(rest, args[i:]...)
+			}
+			break
+		}
+
+		name, value, hasValue, ok := splitFlagToken(tok)
+		if !ok {
+			if command == "" {
+				command = tok
+			}
+			rest = append(rest, tok)
+			prevWasSubcmdFlag = false
+			i++
+			continue
+		}
+
+		// Leave flags owned by the already-identified command to the subcommand.
+		if command != "" {
+			if owned, found := commandOwnedFlags[command]; found && owned[name] {
+				rest = append(rest, tok)
+				prevWasSubcmdFlag = true
+				i++
+				continue
+			}
+		}
+
+		switch {
+		case globalBoolFlags[name]:
+			if hasValue {
+				b, err := parseBoolFlag(value)
+				if err != nil {
+					return g, nil, UsageError{Msg: fmt.Sprintf("invalid boolean value %q for --%s", value, name)}
+				}
+				setGlobalBool(&g, name, b)
+			} else {
+				setGlobalBool(&g, name, true)
+			}
+			prevWasSubcmdFlag = false
+			i++
+		case globalValueFlags[name] && !prevWasSubcmdFlag:
+			if hasValue {
+				setGlobalValue(&g, name, value)
+				i++
+			} else {
+				if i+1 >= len(args) {
+					return g, nil, UsageError{Msg: fmt.Sprintf("flag --%s needs an argument", name)}
+				}
+				setGlobalValue(&g, name, args[i+1])
+				i += 2
+			}
+			prevWasSubcmdFlag = false
+		default:
+			// Unknown flag (or a global value flag that is really the value of a
+			// preceding subcommand flag): belongs to the subcommand.
+			rest = append(rest, tok)
+			prevWasSubcmdFlag = true
+			i++
+		}
+	}
+
+	return g, rest, nil
+}
+
+func parseBoolFlag(value string) (bool, error) {
+	switch strings.ToLower(value) {
+	case "1", "t", "true", "yes":
+		return true, nil
+	case "0", "f", "false", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean %q", value)
+	}
+}
+
+func setGlobalBool(g *globalFlagValues, name string, v bool) {
+	switch name {
+	case "json":
+		g.json = v
+	case "plain":
+		g.plain = v
+	case "no-color":
+		g.noColor = v
+	case "help", "h":
+		g.help = v
+	case "version":
+		g.version = v
+	}
+}
+
+func setGlobalValue(g *globalFlagValues, name, value string) {
+	switch name {
+	case "base-url":
+		g.baseURL = value
+	case "token":
+		g.token = value
+	case "account":
+		g.account = value
+	case "config":
+		g.config = value
+	}
+}
+
 func parseGlobal(stderr io.Writer, args []string) (Context, []string, bool, bool, error) {
 	var ctx Context
 	if len(args) == 0 {
@@ -112,59 +303,32 @@ func parseGlobal(stderr io.Writer, args []string) (Context, []string, bool, bool
 		}
 	}
 
-	fs := flag.NewFlagSet("fizzy-cli", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	var (
-		flagBaseURL string
-		flagToken   string
-		flagAccount string
-		flagConfig  string
-		flagJSON    bool
-		flagPlain   bool
-		flagNoColor bool
-		flagHelp    bool
-		flagVersion bool
-	)
-
-	fs.StringVar(&flagBaseURL, "base-url", "", "API base URL")
-	fs.StringVar(&flagToken, "token", "", "Personal access token")
-	fs.StringVar(&flagAccount, "account", "", "Account slug")
-	fs.StringVar(&flagConfig, "config", defaultConfigPath, "Config file path")
-	fs.BoolVar(&flagJSON, "json", false, "JSON output")
-	fs.BoolVar(&flagPlain, "plain", false, "Plain output")
-	fs.BoolVar(&flagNoColor, "no-color", false, "Disable color")
-	fs.BoolVar(&flagHelp, "help", false, "Show help")
-	fs.BoolVar(&flagHelp, "h", false, "Show help")
-	fs.BoolVar(&flagVersion, "version", false, "Print version")
-
-	if err := fs.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return ctx, nil, true, false, nil
-		}
-		return ctx, nil, false, false, UsageError{Msg: err.Error()}
-	}
-
-	cfg, err := config.Load(flagConfig)
+	g, rest, err := extractGlobalFlags(args[1:])
 	if err != nil {
 		return ctx, nil, false, false, err
 	}
 
-	ctx.ConfigPath = flagConfig
-	ctx.Config = cfg
-	ctx.Output = OutputMode{JSON: flagJSON, Plain: flagPlain}
-	_ = flagNoColor
+	configPath := firstNonEmpty(g.config, defaultConfigPath)
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return ctx, nil, false, false, err
+	}
 
-	ctx.BaseURL = firstNonEmpty(flagBaseURL, os.Getenv("FIZZY_BASE_URL"), cfg.BaseURL, defaultBaseURL)
-	ctx.Token = firstNonEmpty(flagToken, os.Getenv("FIZZY_TOKEN"), cfg.Token)
+	ctx.ConfigPath = configPath
+	ctx.Config = cfg
+	ctx.Output = OutputMode{JSON: g.json, Plain: g.plain}
+	ctx.NoColor = g.noColor || os.Getenv("NO_COLOR") != ""
+
+	ctx.BaseURL = firstNonEmpty(g.baseURL, os.Getenv("FIZZY_BASE_URL"), cfg.BaseURL, defaultBaseURL)
+	ctx.Token = firstNonEmpty(g.token, os.Getenv("FIZZY_TOKEN"), cfg.Token)
 	ctx.SessionToken = cfg.SessionToken
-	ctx.Account = normalizeAccount(firstNonEmpty(flagAccount, os.Getenv("FIZZY_ACCOUNT"), cfg.Account))
+	ctx.Account = normalizeAccount(firstNonEmpty(g.account, os.Getenv("FIZZY_ACCOUNT"), cfg.Account))
 
 	if ctx.Output.JSON && ctx.Output.Plain {
 		return ctx, nil, false, false, UsageError{Msg: "--json and --plain cannot be used together"}
 	}
 
-	return ctx, fs.Args(), flagHelp, flagVersion, nil
+	return ctx, rest, g.help, g.version, nil
 }
 
 func firstNonEmpty(values ...string) string {

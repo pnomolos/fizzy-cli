@@ -224,6 +224,102 @@ func TestAuthStatus(t *testing.T) {
 	assertRequest(t, h.lastRequest(), "GET", "/my/identity")
 }
 
+func TestCardListJSONTrailing(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/cards", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("card", "list", "--board-id", "3", "--json")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	var got, want any
+	if err := json.Unmarshal([]byte(res.stdout), &got); err != nil {
+		t.Fatalf("stdout not JSON: %v (%q)", err, res.stdout)
+	}
+	if err := json.Unmarshal([]byte(cardsFixture), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("json passthrough mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+	rec := h.lastRequest()
+	q, err := url.ParseQuery(rec.RawQuery)
+	if err != nil {
+		t.Fatalf("parse query: %v", err)
+	}
+	if ids := q["board_ids[]"]; !reflect.DeepEqual(ids, []string{"3"}) {
+		t.Errorf("board_ids[] = %v, want [3]", ids)
+	}
+}
+
+func TestJSONLeadingStillWorks(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/cards", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("--json", "card", "list")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(res.stdout), "[") {
+		t.Errorf("expected JSON output, got %q", res.stdout)
+	}
+}
+
+func TestBoardListPlainTrailing(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/boards", stub{Status: 200, Body: boardsFixture})
+
+	res := h.run("board", "list", "--plain")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if strings.Contains(res.stdout, "ALL_ACCESS") {
+		t.Errorf("--plain should omit the header, got %q", res.stdout)
+	}
+	if !strings.Contains(res.stdout, "Roadmap") {
+		t.Errorf("expected rows, got %q", res.stdout)
+	}
+}
+
+func TestAccountValueFlagTrailing(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/2/boards", stub{Status: 200, Body: boardsFixture})
+
+	res := h.run("board", "list", "--account", "2")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/2/boards")
+}
+
+func TestJSONPlainMutualExclusionTrailing(t *testing.T) {
+	h := newHarness(t)
+
+	res := h.run("board", "list", "--json", "--plain")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "cannot be used together") {
+		t.Errorf("stderr = %q, want mutual-exclusion error", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP requests, got %d", h.requestCount())
+	}
+}
+
+func TestConfigSetAccountNotHijacked(t *testing.T) {
+	h := newHarness(t)
+	// `config set --account` owns its own --account flag; the global scanner
+	// must not steal it.
+	res := h.run("config", "set", "--account", "globex")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Config updated") {
+		t.Errorf("stdout = %q, want config updated", res.stdout)
+	}
+}
+
 func TestAuthMissingCredentials(t *testing.T) {
 	h := newHarness(t)
 	h.token = "" // no token via flag, env cleared, no config file

@@ -338,3 +338,50 @@ func TestAuthMissingCredentials(t *testing.T) {
 		t.Errorf("expected no HTTP requests, got %d", h.requestCount())
 	}
 }
+
+func TestBoardUpdateUserIDsTopLevel(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/boards/b1", stub{Status: 204})
+
+	res := h.run("board", "update", "b1", "--name", "Renamed", "--user-id", "u1", "--user-id", "u2")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/boards/b1")
+	// user_ids must be a top-level sibling of board, not nested inside it.
+	assertJSONBody(t, rec, map[string]any{
+		"board":    map[string]any{"name": "Renamed"},
+		"user_ids": []any{"u1", "u2"},
+	})
+}
+
+func TestBoardUpdateUserIDsOnly(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/boards/b1", stub{Status: 204})
+
+	res := h.run("board", "update", "b1", "--user-id", "u1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	// A membership-only update must not send an empty board object (the server
+	// rejects it with 400); restricting to a member list implies all_access:false.
+	assertJSONBody(t, h.lastRequest(), map[string]any{
+		"board":    map[string]any{"all_access": false},
+		"user_ids": []any{"u1"},
+	})
+}
+
+// The --auto-postpone-days flag was removed: the current Fizzy backend does not
+// persist board auto-postpone changes through any API path, so the flag is gone
+// rather than silently lying. Passing it should be an unknown-flag usage error.
+func TestBoardCreateRejectsAutoPostponeFlag(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("board", "create", "--name", "X", "--auto-postpone-days", "7")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}

@@ -77,8 +77,8 @@ func helpForBoard() string {
 	return `USAGE:
   fizzy-cli board list
   fizzy-cli board get <board-id>
-  fizzy-cli board create --name <name> [--all-access] [--auto-postpone-days N] [--public-description TEXT]
-  fizzy-cli board update <board-id> [--name <name>] [--all-access] [--no-all-access] [--auto-postpone-days N] [--public-description TEXT] [--user-id ID ...]
+  fizzy-cli board create --name <name> [--all-access] [--public-description TEXT]
+  fizzy-cli board update <board-id> [--name <name>] [--all-access] [--no-all-access] [--public-description TEXT] [--user-id ID ...]
   fizzy-cli board delete <board-id>
 `
 }

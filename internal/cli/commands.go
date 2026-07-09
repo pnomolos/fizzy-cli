@@ -295,7 +295,6 @@ func runBoard(ctx Context, args []string) int {
 		fs.SetOutput(io.Discard)
 		name := fs.String("name", "", "Board name")
 		allAccess := fs.Bool("all-access", true, "Allow all access")
-		autoPostpone := fs.Int("auto-postpone-days", 0, "Auto postpone period (days)")
 		publicDesc := fs.String("public-description", "", "Public description")
 		if err := fs.Parse(args[1:]); err != nil {
 			return ctx.usageError(helpForBoard(), err)
@@ -308,9 +307,6 @@ func runBoard(ctx Context, args []string) int {
 				"name":       strings.TrimSpace(*name),
 				"all_access": *allAccess,
 			},
-		}
-		if *autoPostpone > 0 {
-			payload["board"].(map[string]any)["auto_postpone_period"] = *autoPostpone
 		}
 		if strings.TrimSpace(*publicDesc) != "" {
 			payload["board"].(map[string]any)["public_description"] = *publicDesc
@@ -329,7 +325,6 @@ func runBoard(ctx Context, args []string) int {
 		name := fs.String("name", "", "Board name")
 		allAccess := fs.Bool("all-access", false, "Allow all access")
 		noAllAccess := fs.Bool("no-all-access", false, "Disable all access")
-		autoPostpone := fs.Int("auto-postpone-days", 0, "Auto postpone period (days)")
 		publicDesc := fs.String("public-description", "", "Public description")
 		userIDs := multiString{}
 		fs.Var(&userIDs, "user-id", "User ID (repeatable)")
@@ -349,19 +344,24 @@ func runBoard(ctx Context, args []string) int {
 		if *noAllAccess {
 			board["all_access"] = false
 		}
-		if *autoPostpone > 0 {
-			board["auto_postpone_period"] = *autoPostpone
-		}
 		if strings.TrimSpace(*publicDesc) != "" {
 			board["public_description"] = *publicDesc
 		}
-		if len(userIDs.values) > 0 {
-			board["user_ids"] = userIDs.values
-		}
-		if len(board) == 0 {
+		if len(board) == 0 && len(userIDs.values) == 0 {
 			return ctx.handleErr(helpForBoard(), UsageError{Msg: "no fields to update"})
 		}
+		// The server reads user_ids as a top-level param, a sibling of board
+		// (not nested inside it), so send it alongside the board object. It also
+		// rejects an empty board object, and a board restricted to a specific
+		// member list is by definition not all-access, so default all_access to
+		// false when only members are being changed.
+		if len(userIDs.values) > 0 && len(board) == 0 {
+			board["all_access"] = false
+		}
 		payload := map[string]any{"board": board}
+		if len(userIDs.values) > 0 {
+			payload["user_ids"] = userIDs.values
+		}
 		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/boards/"+args[1]), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
 			return ctx.handleErr(helpForBoard(), err)

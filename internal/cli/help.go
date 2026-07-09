@@ -26,6 +26,7 @@ COMMANDS:
   comment           Manage card comments
   step              Manage card steps (checklist items)
   reaction          Manage reactions on cards and comments
+  pin               List your pinned cards
   tag               List tags
   column            Manage columns
   user              Manage users
@@ -110,6 +111,8 @@ func helpForCard() string {
   fizzy-cli card assign <card-number> --assignee-id <user-id>
   fizzy-cli card watch <card-number>
   fizzy-cli card unwatch <card-number>
+  fizzy-cli card pin <card-number>
+  fizzy-cli card unpin <card-number>
 
 FILTERS:
   --board-id ID           repeatable
@@ -159,6 +162,16 @@ func helpForReaction() string {
 NOTES:
   --content is limited to 16 characters. Pass --comment-id to react to a
   comment instead of the card itself.
+`
+}
+
+func helpForPin() string {
+	return `USAGE:
+  fizzy-cli pin list
+
+NOTES:
+  Lists your pinned cards. Pin or unpin a card with 'card pin <n>' /
+  'card unpin <n>'.
 `
 }
 
@@ -214,6 +227,8 @@ func helpForCommand(cmd string) string {
 		return helpForStep()
 	case "reaction":
 		return helpForReaction()
+	case "pin":
+		return helpForPin()
 	case "tag":
 		return helpForTag()
 	case "column":

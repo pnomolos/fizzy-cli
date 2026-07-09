@@ -775,6 +775,45 @@ func TestReactionRemoveOnComment(t *testing.T) {
 	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/comments/c1/reactions/r9")
 }
 
+func TestPinList(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/my/pins", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("pin", "list")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "#   TITLE       STATUS  BOARD    LAST_ACTIVE\n7   Fix login   open    Bugs     2024-05-06\n12  Add search  closed  Roadmap  2024-05-07\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/my/pins")
+}
+
+func TestCardPinUnpin(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/pin", stub{Status: 204})
+	h.route("DELETE", "/acme/cards/7/pin", stub{Status: 204})
+
+	res := h.run("card", "pin", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card pinned.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/cards/7/pin")
+
+	res = h.run("card", "unpin", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Card unpinned.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/pin")
+}
+
 func TestAuthTokenRevoke(t *testing.T) {
 	h := newHarness(t)
 	h.route("DELETE", "/my/access_tokens/t9", stub{Status: 204})

@@ -1231,6 +1231,111 @@ func setStepCompleted(ctx Context, args []string, completed bool) int {
 	return outputNoContent(ctx, resp, message)
 }
 
+func runReaction(ctx Context, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(ctx.Stderr, helpForReaction())
+		return 2
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForReaction(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForReaction(), err)
+	}
+	switch args[0] {
+	case "list":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForReaction(), UsageError{Msg: "card number is required"})
+		}
+		fs := flag.NewFlagSet("reaction list", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		commentID := fs.String("comment-id", "", "Comment ID (react to a comment instead of the card)")
+		if err := fs.Parse(args[2:]); err != nil {
+			return ctx.usageError(helpForReaction(), err)
+		}
+		path := withAccount(ctx, reactionsPath(args[1], *commentID))
+		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForReaction(), err)
+		}
+		return outputListOrJSON(ctx, resp, reactionListHeaders, reactionListRows)
+	case "add":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForReaction(), UsageError{Msg: "card number is required"})
+		}
+		fs := flag.NewFlagSet("reaction add", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		content := fs.String("content", "", "Reaction content (e.g. an emoji)")
+		commentID := fs.String("comment-id", "", "Comment ID (react to a comment instead of the card)")
+		if err := fs.Parse(args[2:]); err != nil {
+			return ctx.usageError(helpForReaction(), err)
+		}
+		contentVal := strings.TrimSpace(*content)
+		if contentVal == "" {
+			return ctx.handleErr(helpForReaction(), UsageError{Msg: "--content is required"})
+		}
+		if len(contentVal) > 16 {
+			return ctx.handleErr(helpForReaction(), UsageError{Msg: "--content must be 16 characters or fewer"})
+		}
+		payload := map[string]any{"reaction": map[string]any{"content": contentVal}}
+		path := withAccount(ctx, reactionsPath(args[1], *commentID))
+		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForReaction(), err)
+		}
+		return outputCreatedID(ctx, resp, "Reaction added")
+	case "remove":
+		if len(args) < 3 {
+			return ctx.handleErr(helpForReaction(), UsageError{Msg: "card number and reaction id are required"})
+		}
+		fs := flag.NewFlagSet("reaction remove", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		commentID := fs.String("comment-id", "", "Comment ID (remove a reaction from a comment instead of the card)")
+		if err := fs.Parse(args[3:]); err != nil {
+			return ctx.usageError(helpForReaction(), err)
+		}
+		path := withAccount(ctx, reactionsPath(args[1], *commentID)+"/"+args[2])
+		resp, err := ctx.Client.Do(requestContext(), "DELETE", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForReaction(), err)
+		}
+		return outputNoContent(ctx, resp, "Reaction removed")
+	default:
+		fmt.Fprint(ctx.Stderr, helpForReaction())
+		return 2
+	}
+}
+
+// reactionsPath builds the reactions collection path for a card, or for one of
+// its comments when commentID is non-empty.
+func reactionsPath(cardNumber, commentID string) string {
+	commentID = strings.TrimSpace(commentID)
+	if commentID == "" {
+		return "/cards/" + cardNumber + "/reactions"
+	}
+	return "/cards/" + cardNumber + "/comments/" + commentID + "/reactions"
+}
+
+// outputCreatedID prints the id of a just-created resource whose response has
+// no Location header (the id lives in the JSON body instead).
+func outputCreatedID(ctx Context, resp *api.Response, successMessage string) int {
+	if ctx.Output.JSON {
+		return ctx.printJSONResponse(resp)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Body, &created); err != nil {
+		return ctx.handleErr("", err)
+	}
+	if created.ID != "" {
+		fmt.Fprintf(ctx.Stdout, "%s: %s\n", successMessage, created.ID)
+		return 0
+	}
+	fmt.Fprintln(ctx.Stdout, successMessage+".")
+	return 0
+}
+
 func listWithPagination(ctx Context, help string, path string, query url.Values, all bool, headers []string, rowFn func([]byte) ([][]string, error)) int {
 	if !all {
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, query, nil, "", nil)

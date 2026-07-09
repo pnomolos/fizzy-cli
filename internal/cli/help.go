@@ -25,6 +25,7 @@ COMMANDS:
   card              Manage cards
   comment           Manage card comments
   step              Manage card steps (checklist items)
+  reaction          Manage reactions on cards and comments
   tag               List tags
   column            Manage columns
   user              Manage users
@@ -149,6 +150,18 @@ func helpForStep() string {
 `
 }
 
+func helpForReaction() string {
+	return `USAGE:
+  fizzy-cli reaction list <card-number> [--comment-id ID]
+  fizzy-cli reaction add <card-number> --content EMOJI [--comment-id ID]
+  fizzy-cli reaction remove <card-number> <reaction-id> [--comment-id ID]
+
+NOTES:
+  --content is limited to 16 characters. Pass --comment-id to react to a
+  comment instead of the card itself.
+`
+}
+
 func helpForTag() string {
 	return `USAGE:
   fizzy-cli tag list
@@ -199,6 +212,8 @@ func helpForCommand(cmd string) string {
 		return helpForComment()
 	case "step":
 		return helpForStep()
+	case "reaction":
+		return helpForReaction()
 	case "tag":
 		return helpForTag()
 	case "column":

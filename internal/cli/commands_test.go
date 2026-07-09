@@ -684,6 +684,97 @@ func TestStepDelete(t *testing.T) {
 	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/steps/s9")
 }
 
+const reactionsFixture = `[{"id":"r1","content":"👍","reacter":{"name":"Ada"}},{"id":"r2","content":"🎉","reacter":{"name":"Bob"}}]`
+
+func TestReactionList(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/cards/7/reactions", stub{Status: 200, Body: reactionsFixture})
+
+	res := h.run("reaction", "list", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID  CONTENT  REACTER\nr1  👍        Ada\nr2  🎉        Bob\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/cards/7/reactions")
+}
+
+func TestReactionListOnComment(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/cards/7/comments/c1/reactions", stub{Status: 200, Body: reactionsFixture})
+
+	res := h.run("reaction", "list", "7", "--comment-id", "c1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/cards/7/comments/c1/reactions")
+}
+
+func TestReactionAdd(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/reactions", stub{Status: 201, Body: `{"id":"r9","content":"👍","reacter":{"name":"Ada"}}`})
+
+	res := h.run("reaction", "add", "7", "--content", "👍")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Reaction added: r9\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "POST", "/acme/cards/7/reactions")
+	assertJSONBody(t, rec, map[string]any{"reaction": map[string]any{"content": "👍"}})
+}
+
+func TestReactionAddOnComment(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/comments/c1/reactions", stub{Status: 201, Body: `{"id":"r9","content":"🎉","reacter":{"name":"Ada"}}`})
+
+	res := h.run("reaction", "add", "7", "--comment-id", "c1", "--content", "🎉")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/cards/7/comments/c1/reactions")
+}
+
+func TestReactionAddContentTooLong(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("reaction", "add", "7", "--content", "this-is-way-too-long")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestReactionRemove(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/acme/cards/7/reactions/r9", stub{Status: 204})
+
+	res := h.run("reaction", "remove", "7", "r9")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Reaction removed.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/reactions/r9")
+}
+
+func TestReactionRemoveOnComment(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/acme/cards/7/comments/c1/reactions/r9", stub{Status: 204})
+
+	res := h.run("reaction", "remove", "7", "r9", "--comment-id", "c1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/comments/c1/reactions/r9")
+}
+
 func TestAuthTokenRevoke(t *testing.T) {
 	h := newHarness(t)
 	h.route("DELETE", "/my/access_tokens/t9", stub{Status: 204})

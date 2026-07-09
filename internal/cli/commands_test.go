@@ -958,3 +958,49 @@ func TestAuthTokenRevoke(t *testing.T) {
 	}
 	assertRequest(t, h.lastRequest(), "DELETE", "/my/access_tokens/t9")
 }
+
+const activitiesFixture = `[{"id":"a1","action":"card_published","created_at":"2024-08-01","description":"Ada added &quot;Fix login&quot;","eventable_type":"Card","eventable":{"number":7},"board":{"name":"Bugs"},"creator":{"name":"Ada"}}]`
+
+func TestActivityList(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/activities", stub{Status: 200, Body: activitiesFixture})
+
+	res := h.run("activity", "list", "--board-id", "b1", "--creator-id", "u1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "TIME        ACTION          DESCRIPTION            CARD  BOARD  CREATOR\n" +
+		"2024-08-01  card_published  Ada added \"Fix login\"  7     Bugs   Ada\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "GET", "/acme/activities")
+	if rec.RawQuery != "board_ids%5B%5D=b1&creator_ids%5B%5D=u1" {
+		t.Errorf("query = %q", rec.RawQuery)
+	}
+}
+
+func TestActivityListAll(t *testing.T) {
+	h := newHarness(t)
+	page1 := `[{"id":"a1","action":"card_published","created_at":"2024-08-01","description":"First","board":{"name":"Bugs"},"creator":{"name":"Ada"}}]`
+	page2 := `[{"id":"a2","action":"card_closed","created_at":"2024-08-02","description":"Second","board":{"name":"Bugs"},"creator":{"name":"Bob"}}]`
+	h.route("GET", "/acme/activities", stub{Status: 200, Body: page1, Headers: map[string]string{
+		"Link": `<` + h.server.URL + `/acme/activities/page2>; rel="next"`,
+	}})
+	h.route("GET", "/acme/activities/page2", stub{Status: 200, Body: page2})
+
+	res := h.run("activity", "list", "--all")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 2 {
+		t.Fatalf("expected 2 requests, got %d", h.requestCount())
+	}
+	if strings.Count(res.stdout, "TIME") != 1 {
+		t.Errorf("expected header to appear exactly once, stdout=%q", res.stdout)
+	}
+	if !strings.Contains(res.stdout, "card_published") || !strings.Contains(res.stdout, "card_closed") {
+		t.Errorf("expected rows from both pages, stdout=%q", res.stdout)
+	}
+}

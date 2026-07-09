@@ -31,6 +31,7 @@ COMMANDS:
   column            Manage columns
   user              Manage users
   notification      Manage notifications
+  activity          List account activity
   help              Show help for a command
 
 GLOBAL FLAGS:
@@ -219,6 +220,16 @@ func helpForNotification() string {
 `
 }
 
+func helpForActivity() string {
+	return `USAGE:
+  fizzy-cli activity list [--board-id ID ...] [--creator-id ID ...] [--all]
+
+NOTES:
+  Description text has HTML tags/entities stripped for table display; use
+  --json for the raw description and particulars.
+`
+}
+
 func helpForCommand(cmd string) string {
 	switch cmd {
 	case "auth":
@@ -247,6 +258,8 @@ func helpForCommand(cmd string) string {
 		return helpForUser()
 	case "notification":
 		return helpForNotification()
+	case "activity":
+		return helpForActivity()
 	default:
 		return fmt.Sprintf("Unknown command %q.\n\n%s", cmd, rootHelp)
 	}

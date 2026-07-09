@@ -48,11 +48,19 @@ func helpForAuth() string {
   fizzy-cli auth login --email user@example.com [--code ABC123]
   fizzy-cli auth logout
   fizzy-cli auth status
+  fizzy-cli auth token list
+  fizzy-cli auth token create --description TEXT --permission read|write [--save]
+  fizzy-cli auth token revoke <token-id>
 
 FLAGS:
   --token string   Personal access token (reads from stdin or prompt if omitted)
   --email string   Email address for magic-link login
   --code string    Magic-link code (required if not running in a TTY)
+
+NOTES:
+  'auth token' manages personal access tokens and is unscoped (not
+  account-specific). 'create' prints the token value once; use --save to
+  also write it to the config file as the active token.
 `
 }
 

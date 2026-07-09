@@ -93,6 +93,88 @@ func runAuth(ctx Context, args []string) int {
 		}
 		printTable(ctx.Stdout, []string{"SLUG", "NAME", "USER"}, rows, ctx.Output.Plain)
 		return 0
+	case "token":
+		return runAuthToken(ctx, args[1:])
+	default:
+		fmt.Fprint(ctx.Stderr, helpForAuth())
+		return 2
+	}
+}
+
+// runAuthToken manages personal access tokens via the unscoped
+// /my/access_tokens endpoints (no account prefix).
+func runAuthToken(ctx Context, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(ctx.Stderr, helpForAuth())
+		return 2
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForAuth(), err)
+	}
+	switch args[0] {
+	case "list":
+		resp, err := ctx.Client.Do(requestContext(), "GET", "/my/access_tokens", nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAuth(), err)
+		}
+		return outputListOrJSON(ctx, resp, accessTokenListHeaders, accessTokenListRows)
+	case "create":
+		fs := flag.NewFlagSet("auth token create", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		description := fs.String("description", "", "Token description")
+		permission := fs.String("permission", "", "Token permission: read|write")
+		save := fs.Bool("save", false, "Save the created token to config")
+		if err := fs.Parse(args[1:]); err != nil {
+			return ctx.usageError(helpForAuth(), err)
+		}
+		description2 := strings.TrimSpace(*description)
+		if description2 == "" {
+			return ctx.handleErr(helpForAuth(), UsageError{Msg: "--description is required"})
+		}
+		perm := strings.TrimSpace(*permission)
+		if perm != "read" && perm != "write" {
+			return ctx.handleErr(helpForAuth(), UsageError{Msg: "--permission must be read or write"})
+		}
+		payload := map[string]any{"access_token": map[string]any{
+			"description": description2,
+			"permission":  perm,
+		}}
+		resp, err := ctx.Client.Do(requestContext(), "POST", "/my/access_tokens", nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAuth(), err)
+		}
+		var created accessTokenCreated
+		if err := json.Unmarshal(resp.Body, &created); err != nil {
+			return ctx.handleErr(helpForAuth(), err)
+		}
+		if *save {
+			cfg := ctx.Config
+			cfg.Token = created.Token
+			cfg.SessionToken = ""
+			if err := configSave(ctx.ConfigPath, cfg); err != nil {
+				return ctx.handleErr(helpForAuth(), err)
+			}
+		}
+		if ctx.Output.JSON {
+			return ctx.printJSONResponse(resp)
+		}
+		// The token value is only ever shown once; print it plainly so it can be
+		// captured/piped.
+		fmt.Fprintf(ctx.Stdout, "Token: %s\n", created.Token)
+		fmt.Fprintln(ctx.Stdout, "Store this token now; it will not be shown again.")
+		if *save {
+			fmt.Fprintf(ctx.Stdout, "Saved to %s\n", ctx.ConfigPath)
+		}
+		return 0
+	case "revoke":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForAuth(), UsageError{Msg: "token id is required"})
+		}
+		resp, err := ctx.Client.Do(requestContext(), "DELETE", "/my/access_tokens/"+args[1], nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForAuth(), err)
+		}
+		return outputNoContent(ctx, resp, "Token revoked")
 	default:
 		fmt.Fprint(ctx.Stderr, helpForAuth())
 		return 2

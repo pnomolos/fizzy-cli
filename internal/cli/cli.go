@@ -101,6 +101,8 @@ func Run(stdout, stderr io.Writer, version, commit, buildDate string, args []str
 		return runStep(ctx, rest[1:])
 	case "reaction":
 		return runReaction(ctx, rest[1:])
+	case "pin":
+		return runPin(ctx, rest[1:])
 	default:
 		ctx.printErr(UsageError{Msg: fmt.Sprintf("unknown command %q", rest[0])})
 		fmt.Fprint(stderr, "\n")

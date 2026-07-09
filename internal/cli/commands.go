@@ -731,6 +731,10 @@ func runCard(ctx Context, args []string) int {
 		return simpleCardAction(ctx, helpForCard(), args, "watch", "POST", "/watch", "Subscribed to card")
 	case "unwatch":
 		return simpleCardAction(ctx, helpForCard(), args, "unwatch", "DELETE", "/watch", "Unsubscribed from card")
+	case "pin":
+		return simpleCardAction(ctx, helpForCard(), args, "pin", "POST", "/pin", "Card pinned")
+	case "unpin":
+		return simpleCardAction(ctx, helpForCard(), args, "unpin", "DELETE", "/pin", "Card unpinned")
 	default:
 		fmt.Fprint(ctx.Stderr, helpForCard())
 		return 2
@@ -1334,6 +1338,25 @@ func outputCreatedID(ctx Context, resp *api.Response, successMessage string) int
 	}
 	fmt.Fprintln(ctx.Stdout, successMessage+".")
 	return 0
+}
+
+func runPin(ctx Context, args []string) int {
+	if len(args) == 0 || args[0] != "list" {
+		fmt.Fprint(ctx.Stderr, helpForPin())
+		return 2
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForPin(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForPin(), err)
+	}
+	resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/my/pins"), nil, nil, "", nil)
+	if err != nil {
+		return ctx.handleErr(helpForPin(), err)
+	}
+	// Pins are full card objects, so reuse the card list rendering.
+	return outputListOrJSON(ctx, resp, cardListHeaders, cardListRows)
 }
 
 func listWithPagination(ctx Context, help string, path string, query url.Values, all bool, headers []string, rowFn func([]byte) ([][]string, error)) int {

@@ -214,6 +214,12 @@ func helpForColumn() string {
   fizzy-cli column create --board-id <board-id> --name <name> [--color <color>]
   fizzy-cli column update --board-id <board-id> <column-id> [--name <name>] [--color <color>]
   fizzy-cli column delete --board-id <board-id> <column-id>
+  fizzy-cli column cards --board-id <board-id> <column-id> [--all]
+  fizzy-cli column move --board-id <board-id> <column-id> --left|--right
+
+NOTES:
+  --left and --right are mutually exclusive on 'column move'; exactly one
+  is required.
 `
 }
 

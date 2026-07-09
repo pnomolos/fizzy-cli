@@ -24,6 +24,7 @@ COMMANDS:
   board             Manage boards
   card              Manage cards
   comment           Manage card comments
+  step              Manage card steps (checklist items)
   tag               List tags
   column            Manage columns
   user              Manage users
@@ -137,6 +138,17 @@ func helpForComment() string {
 `
 }
 
+func helpForStep() string {
+	return `USAGE:
+  fizzy-cli step list <card-number>
+  fizzy-cli step add <card-number> --content TEXT [--completed]
+  fizzy-cli step update <card-number> <step-id> [--content TEXT] [--completed|--not-completed]
+  fizzy-cli step check <card-number> <step-id>
+  fizzy-cli step uncheck <card-number> <step-id>
+  fizzy-cli step delete <card-number> <step-id>
+`
+}
+
 func helpForTag() string {
 	return `USAGE:
   fizzy-cli tag list
@@ -185,6 +197,8 @@ func helpForCommand(cmd string) string {
 		return helpForCard()
 	case "comment":
 		return helpForComment()
+	case "step":
+		return helpForStep()
 	case "tag":
 		return helpForTag()
 	case "column":

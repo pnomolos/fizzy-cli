@@ -1112,6 +1112,125 @@ func runNotification(ctx Context, args []string) int {
 	}
 }
 
+func runStep(ctx Context, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(ctx.Stderr, helpForStep())
+		return 2
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForStep(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForStep(), err)
+	}
+	switch args[0] {
+	case "list":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForStep(), UsageError{Msg: "card number is required"})
+		}
+		path := withAccount(ctx, "/cards/"+args[1]+"/steps")
+		resp, err := ctx.Client.Do(requestContext(), "GET", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForStep(), err)
+		}
+		return outputListOrJSON(ctx, resp, stepListHeaders, stepListRows)
+	case "add":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForStep(), UsageError{Msg: "card number is required"})
+		}
+		fs := flag.NewFlagSet("step add", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		content := fs.String("content", "", "Step content")
+		completed := fs.Bool("completed", false, "Mark the step completed")
+		if err := fs.Parse(args[2:]); err != nil {
+			return ctx.usageError(helpForStep(), err)
+		}
+		if strings.TrimSpace(*content) == "" {
+			return ctx.handleErr(helpForStep(), UsageError{Msg: "--content is required"})
+		}
+		stepPayload := map[string]any{"content": strings.TrimSpace(*content)}
+		if *completed {
+			stepPayload["completed"] = true
+		}
+		payload := map[string]any{"step": stepPayload}
+		path := withAccount(ctx, "/cards/"+args[1]+"/steps")
+		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForStep(), err)
+		}
+		return outputLocation(ctx, resp, "Step added")
+	case "update":
+		if len(args) < 3 {
+			return ctx.handleErr(helpForStep(), UsageError{Msg: "card number and step id are required"})
+		}
+		fs := flag.NewFlagSet("step update", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		content := fs.String("content", "", "Step content")
+		completed := fs.Bool("completed", false, "Mark the step completed")
+		notCompleted := fs.Bool("not-completed", false, "Mark the step not completed")
+		if err := fs.Parse(args[3:]); err != nil {
+			return ctx.usageError(helpForStep(), err)
+		}
+		if *completed && *notCompleted {
+			return ctx.handleErr(helpForStep(), UsageError{Msg: "--completed and --not-completed cannot be used together"})
+		}
+		stepPayload := map[string]any{}
+		if strings.TrimSpace(*content) != "" {
+			stepPayload["content"] = strings.TrimSpace(*content)
+		}
+		if *completed {
+			stepPayload["completed"] = true
+		}
+		if *notCompleted {
+			stepPayload["completed"] = false
+		}
+		if len(stepPayload) == 0 {
+			return ctx.handleErr(helpForStep(), UsageError{Msg: "no fields to update"})
+		}
+		payload := map[string]any{"step": stepPayload}
+		path := withAccount(ctx, "/cards/"+args[1]+"/steps/"+args[2])
+		resp, err := ctx.Client.Do(requestContext(), "PUT", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForStep(), err)
+		}
+		return outputNoContent(ctx, resp, "Step updated")
+	case "check":
+		return setStepCompleted(ctx, args, true)
+	case "uncheck":
+		return setStepCompleted(ctx, args, false)
+	case "delete":
+		if len(args) < 3 {
+			return ctx.handleErr(helpForStep(), UsageError{Msg: "card number and step id are required"})
+		}
+		path := withAccount(ctx, "/cards/"+args[1]+"/steps/"+args[2])
+		resp, err := ctx.Client.Do(requestContext(), "DELETE", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForStep(), err)
+		}
+		return outputNoContent(ctx, resp, "Step deleted")
+	default:
+		fmt.Fprint(ctx.Stderr, helpForStep())
+		return 2
+	}
+}
+
+func setStepCompleted(ctx Context, args []string, completed bool) int {
+	if len(args) < 3 {
+		return ctx.handleErr(helpForStep(), UsageError{Msg: "card number and step id are required"})
+	}
+	payload := map[string]any{"step": map[string]any{"completed": completed}}
+	path := withAccount(ctx, "/cards/"+args[1]+"/steps/"+args[2])
+	resp, err := ctx.Client.Do(requestContext(), "PUT", path, nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+	if err != nil {
+		return ctx.handleErr(helpForStep(), err)
+	}
+	message := "Step checked"
+	if !completed {
+		message = "Step unchecked"
+	}
+	return outputNoContent(ctx, resp, message)
+}
+
 func listWithPagination(ctx Context, help string, path string, query url.Values, all bool, headers []string, rowFn func([]byte) ([][]string, error)) int {
 	if !all {
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, query, nil, "", nil)

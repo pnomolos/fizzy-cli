@@ -33,6 +33,7 @@ COMMANDS:
   notification      Manage notifications
   activity          List account activity
   search            Search cards
+  webhook           Manage board webhooks (admin)
   help              Show help for a command
 
 GLOBAL FLAGS:
@@ -262,6 +263,28 @@ NOTES:
 `
 }
 
+func helpForWebhook() string {
+	return `USAGE:
+  fizzy-cli webhook list --board-id <board-id>
+  fizzy-cli webhook get --board-id <board-id> <webhook-id>
+  fizzy-cli webhook create --board-id <board-id> --name TEXT --url URL --event ACTION [--event ACTION ...]
+  fizzy-cli webhook update --board-id <board-id> <webhook-id> [--name TEXT] [--event ACTION ...]
+  fizzy-cli webhook delete --board-id <board-id> <webhook-id>
+  fizzy-cli webhook activate --board-id <board-id> <webhook-id>
+  fizzy-cli webhook deliveries --board-id <board-id> <webhook-id> [--all]
+
+EVENTS (valid --event values):
+  card_assigned, card_closed, card_postponed, card_auto_postponed,
+  card_board_changed, card_published, card_reopened,
+  card_sent_back_to_triage, card_triaged, card_unassigned, comment_created
+
+NOTES:
+  Webhook management requires board admin privileges. 'create' requires at
+  least one --event. The payload URL is immutable: 'update' rejects --url.
+  'get' shows the signing secret and subscribed actions.
+`
+}
+
 func helpForCommand(cmd string) string {
 	switch cmd {
 	case "auth":
@@ -294,6 +317,8 @@ func helpForCommand(cmd string) string {
 		return helpForActivity()
 	case "search":
 		return helpForSearch()
+	case "webhook":
+		return helpForWebhook()
 	default:
 		return fmt.Sprintf("Unknown command %q.\n\n%s", cmd, rootHelp)
 	}

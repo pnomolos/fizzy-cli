@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"sort"
 	"strings"
 )
 
@@ -20,6 +21,7 @@ var (
 	reactionListHeaders     = []string{"ID", "CONTENT", "REACTER"}
 	activityListHeaders     = []string{"TIME", "ACTION", "DESCRIPTION", "CARD", "BOARD", "CREATOR"}
 	boardAccessListHeaders  = []string{"USER", "ROLE", "HAS_ACCESS", "INVOLVEMENT"}
+	webhookListHeaders      = []string{"ID", "NAME", "ACTIVE", "URL"}
 )
 
 type board struct {
@@ -185,6 +187,28 @@ type step struct {
 	ID        string `json:"id"`
 	Content   string `json:"content"`
 	Completed bool   `json:"completed"`
+}
+
+type webhook struct {
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Active            bool     `json:"active"`
+	SigningSecret     string   `json:"signing_secret"`
+	SubscribedActions []string `json:"subscribed_actions"`
+	PayloadURL        string   `json:"payload_url"`
+	CreatedAt         string   `json:"created_at"`
+	URL               string   `json:"url"`
+}
+
+type exportJob struct {
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
+	DownloadURL string `json:"download_url"`
+}
+
+type notificationSettings struct {
+	BundleEmailFrequency string `json:"bundle_email_frequency"`
 }
 
 type activity struct {
@@ -494,4 +518,122 @@ func formatUser(body []byte) (string, error) {
 		"ID: %s\nName: %s\nRole: %s\nEmail: %s",
 		u.ID, u.Name, u.Role, u.Email,
 	), nil
+}
+
+func webhookListRows(body []byte) ([][]string, error) {
+	var hooks []webhook
+	if err := json.Unmarshal(body, &hooks); err != nil {
+		return nil, err
+	}
+	rows := make([][]string, 0, len(hooks))
+	for _, h := range hooks {
+		rows = append(rows, []string{h.ID, h.Name, fmt.Sprintf("%t", h.Active), h.PayloadURL})
+	}
+	return rows, nil
+}
+
+func formatWebhook(body []byte) (string, error) {
+	var h webhook
+	if err := json.Unmarshal(body, &h); err != nil {
+		return "", err
+	}
+	builder := &strings.Builder{}
+	fmt.Fprintf(builder, "ID: %s\n", h.ID)
+	fmt.Fprintf(builder, "Name: %s\n", h.Name)
+	fmt.Fprintf(builder, "Active: %t\n", h.Active)
+	fmt.Fprintf(builder, "URL: %s\n", h.PayloadURL)
+	fmt.Fprintf(builder, "Signing secret: %s\n", h.SigningSecret)
+	fmt.Fprintf(builder, "Subscribed actions: %s\n", strings.Join(h.SubscribedActions, ", "))
+	if h.CreatedAt != "" {
+		fmt.Fprintf(builder, "Created: %s\n", h.CreatedAt)
+	}
+	return strings.TrimSpace(builder.String()), nil
+}
+
+func formatExport(body []byte) (string, error) {
+	var e exportJob
+	if err := json.Unmarshal(body, &e); err != nil {
+		return "", err
+	}
+	builder := &strings.Builder{}
+	fmt.Fprintf(builder, "ID: %s\n", e.ID)
+	fmt.Fprintf(builder, "Status: %s\n", e.Status)
+	if e.CreatedAt != "" {
+		fmt.Fprintf(builder, "Created: %s\n", e.CreatedAt)
+	}
+	if e.DownloadURL != "" {
+		fmt.Fprintf(builder, "Download URL: %s\n", e.DownloadURL)
+	}
+	return strings.TrimSpace(builder.String()), nil
+}
+
+func formatNotificationSettings(body []byte) (string, error) {
+	var s notificationSettings
+	if err := json.Unmarshal(body, &s); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Bundle email frequency: %s", s.BundleEmailFrequency), nil
+}
+
+// webhookDeliveryRows renders webhook delivery log entries generically. The
+// delivery shape is not part of the documented API and is empty until real
+// deliveries occur, so columns are discovered dynamically from the JSON keys
+// (with "id" first, then remaining keys sorted). Nested values are rendered as
+// compact JSON. It returns the derived headers alongside the rows.
+func webhookDeliveryRows(body []byte) ([]string, [][]string, error) {
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(body, &items); err != nil {
+		return nil, nil, err
+	}
+	keySet := map[string]bool{}
+	for _, item := range items {
+		for k := range item {
+			keySet[k] = true
+		}
+	}
+	keys := make([]string, 0, len(keySet))
+	for k := range keySet {
+		if k != "id" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if keySet["id"] {
+		keys = append([]string{"id"}, keys...)
+	}
+	headers := make([]string, len(keys))
+	for i, k := range keys {
+		headers[i] = strings.ToUpper(k)
+	}
+	rows := make([][]string, 0, len(items))
+	for _, item := range items {
+		row := make([]string, len(keys))
+		for i, k := range keys {
+			raw, ok := item[k]
+			if !ok {
+				row[i] = ""
+				continue
+			}
+			row[i] = renderRawValue(raw)
+		}
+		rows = append(rows, row)
+	}
+	return headers, rows, nil
+}
+
+// renderRawValue converts a raw JSON value into a compact table cell: strings
+// are unquoted, scalars printed verbatim, and objects/arrays kept as compact
+// JSON.
+func renderRawValue(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			return s
+		}
+	}
+	return trimmed
 }

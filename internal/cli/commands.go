@@ -1434,6 +1434,64 @@ func runPin(ctx Context, args []string) int {
 	return outputListOrJSON(ctx, resp, cardListHeaders, cardListRows)
 }
 
+// reorderFlagArgs moves positional (non-flag) arguments after all flags so a
+// positional can appear before, between, or after flags regardless of Go's
+// flag package stopping at the first non-flag token. valueFlags names the flags
+// that consume the following token as their value (so it stays paired).
+func reorderFlagArgs(args []string, valueFlags map[string]bool) []string {
+	var flags, positionals []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if len(a) > 1 && a[0] == '-' {
+			flags = append(flags, a)
+			name := strings.TrimLeft(a, "-")
+			if strings.IndexByte(name, '=') >= 0 {
+				continue
+			}
+			if valueFlags[name] && i+1 < len(args) {
+				flags = append(flags, args[i+1])
+				i++
+			}
+			continue
+		}
+		positionals = append(positionals, a)
+	}
+	return append(flags, positionals...)
+}
+
+func runSearch(ctx Context, args []string) int {
+	if len(args) == 0 {
+		return ctx.handleErr(helpForSearch(), UsageError{Msg: "search query is required"})
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForSearch(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForSearch(), err)
+	}
+	fs := flag.NewFlagSet("search", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	all := fs.Bool("all", false, "Fetch all pages")
+	// Reorder so the query works before or after --all (e.g. both
+	// `search foo --all` and `search --all foo`), and a lone `--all` isn't
+	// mistaken for the query.
+	if err := fs.Parse(reorderFlagArgs(args, nil)); err != nil {
+		return ctx.usageError(helpForSearch(), err)
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return ctx.handleErr(helpForSearch(), UsageError{Msg: "search query is required"})
+	}
+	query := url.Values{}
+	query.Set("q", rest[0])
+	// Search results are full card objects, so reuse the card list rendering.
+	return listWithPagination(ctx, helpForSearch(), withAccount(ctx, "/search"), query, *all, cardListHeaders, cardListRows)
+}
+
 func listWithPagination(ctx Context, help string, path string, query url.Values, all bool, headers []string, rowFn func([]byte) ([][]string, error)) int {
 	if !all {
 		resp, err := ctx.Client.Do(requestContext(), "GET", path, query, nil, "", nil)

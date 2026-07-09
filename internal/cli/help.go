@@ -32,6 +32,7 @@ COMMANDS:
   user              Manage users
   notification      Manage notifications
   activity          List account activity
+  search            Search cards
   help              Show help for a command
 
 GLOBAL FLAGS:
@@ -230,6 +231,17 @@ NOTES:
 `
 }
 
+func helpForSearch() string {
+	return `USAGE:
+  fizzy-cli search <query> [--all]
+
+NOTES:
+  Uses an undocumented-but-stable Fizzy endpoint (experimental: shape may
+  change without notice). Results are full card objects, rendered like
+  'card list'.
+`
+}
+
 func helpForCommand(cmd string) string {
 	switch cmd {
 	case "auth":
@@ -260,6 +272,8 @@ func helpForCommand(cmd string) string {
 		return helpForNotification()
 	case "activity":
 		return helpForActivity()
+	case "search":
+		return helpForSearch()
 	default:
 		return fmt.Sprintf("Unknown command %q.\n\n%s", cmd, rootHelp)
 	}

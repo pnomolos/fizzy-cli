@@ -14,6 +14,7 @@ var (
 	columnListHeaders       = []string{"ID", "NAME", "COLOR"}
 	userListHeaders         = []string{"ID", "NAME", "ROLE", "EMAIL"}
 	notificationListHeaders = []string{"ID", "READ", "TITLE", "CARD", "CREATED"}
+	accessTokenListHeaders  = []string{"ID", "DESCRIPTION", "PERMISSION", "CREATED"}
 )
 
 type board struct {
@@ -112,6 +113,20 @@ type notification struct {
 	Card      struct {
 		Title string `json:"title"`
 	} `json:"card"`
+}
+
+type accessToken struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Permission  string `json:"permission"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// accessTokenCreated is the create-response shape: the access token fields
+// plus the one-time-shown token value.
+type accessTokenCreated struct {
+	accessToken
+	Token string `json:"token"`
 }
 
 type identity struct {
@@ -224,6 +239,18 @@ func notificationListRows(body []byte) ([][]string, error) {
 			read = "yes"
 		}
 		rows = append(rows, []string{n.ID, read, n.Title, n.Card.Title, n.CreatedAt})
+	}
+	return rows, nil
+}
+
+func accessTokenListRows(body []byte) ([][]string, error) {
+	var tokens []accessToken
+	if err := json.Unmarshal(body, &tokens); err != nil {
+		return nil, err
+	}
+	rows := make([][]string, 0, len(tokens))
+	for _, t := range tokens {
+		rows = append(rows, []string{t.ID, t.Description, t.Permission, t.CreatedAt})
 	}
 	return rows, nil
 }

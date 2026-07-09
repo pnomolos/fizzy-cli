@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"fizzy-cli/internal/config"
 )
 
 func TestBoardListTable(t *testing.T) {
@@ -520,4 +522,92 @@ func TestBoardCreateRejectsAutoPostponeFlag(t *testing.T) {
 	if h.requestCount() != 0 {
 		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
 	}
+}
+
+const accessTokensFixture = `[{"id":"t1","description":"laptop","permission":"read","created_at":"2024-01-02"},{"id":"t2","description":"CI","permission":"write","created_at":"2024-03-04"}]`
+
+func TestAuthTokenList(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/my/access_tokens", stub{Status: 200, Body: accessTokensFixture})
+
+	res := h.run("auth", "token", "list")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID  DESCRIPTION  PERMISSION  CREATED\nt1  laptop       read        2024-01-02\nt2  CI           write       2024-03-04\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	// Unscoped: no account prefix on the path.
+	assertRequest(t, h.lastRequest(), "GET", "/my/access_tokens")
+}
+
+func TestAuthTokenCreate(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/my/access_tokens", stub{Status: 201, Body: `{"id":"t9","token":"secret-value","description":"laptop","permission":"read","created_at":"2024-01-02"}`})
+
+	res := h.run("auth", "token", "create", "--description", "laptop", "--permission", "read")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Token: secret-value") {
+		t.Errorf("stdout = %q, want it to contain the token", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "POST", "/my/access_tokens")
+	assertJSONBody(t, rec, map[string]any{"access_token": map[string]any{"description": "laptop", "permission": "read"}})
+
+	// Without --save, the token must not be persisted to config.
+	cfg, err := config.Load(h.configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Token != "" {
+		t.Errorf("token should not be saved without --save, got %q", cfg.Token)
+	}
+}
+
+func TestAuthTokenCreateSave(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/my/access_tokens", stub{Status: 201, Body: `{"id":"t9","token":"secret-value","description":"laptop","permission":"write","created_at":"2024-01-02"}`})
+
+	res := h.run("auth", "token", "create", "--description", "laptop", "--permission", "write", "--save")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	cfg, err := config.Load(h.configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Token != "secret-value" {
+		t.Errorf("cfg.Token = %q, want secret-value", cfg.Token)
+	}
+	if cfg.SessionToken != "" {
+		t.Errorf("cfg.SessionToken = %q, want cleared", cfg.SessionToken)
+	}
+}
+
+func TestAuthTokenCreateInvalidPermission(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("auth", "token", "create", "--description", "laptop", "--permission", "admin")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestAuthTokenRevoke(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/my/access_tokens/t9", stub{Status: 204})
+
+	res := h.run("auth", "token", "revoke", "t9")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Token revoked.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/my/access_tokens/t9")
 }

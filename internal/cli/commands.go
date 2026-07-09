@@ -1296,6 +1296,16 @@ func runUser(ctx Context, args []string) int {
 			return ctx.handleErr(helpForUser(), err)
 		}
 		return outputNoContent(ctx, resp, "User deactivated")
+	case "set-timezone":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			return ctx.handleErr(helpForUser(), UsageError{Msg: "IANA timezone name is required (e.g. America/New_York)"})
+		}
+		payload := map[string]any{"timezone_name": strings.TrimSpace(args[1])}
+		resp, err := ctx.Client.Do(requestContext(), "PATCH", withAccount(ctx, "/my/timezone"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForUser(), err)
+		}
+		return outputNoContent(ctx, resp, "Timezone updated")
 	default:
 		fmt.Fprint(ctx.Stderr, helpForUser())
 		return 2
@@ -1360,6 +1370,53 @@ func runNotification(ctx Context, args []string) int {
 			return ctx.handleErr(helpForNotification(), err)
 		}
 		return outputNoContent(ctx, resp, "Notifications marked read")
+	case "settings":
+		return runNotificationSettings(ctx, args[1:])
+	default:
+		fmt.Fprint(ctx.Stderr, helpForNotification())
+		return 2
+	}
+}
+
+// validEmailFrequencies are the accepted bundle_email_frequency values.
+var validEmailFrequencies = map[string]bool{
+	"never":           true,
+	"every_few_hours": true,
+	"daily":           true,
+	"weekly":          true,
+}
+
+// runNotificationSettings handles `notification settings` (show) and
+// `notification settings set --email-frequency ...`.
+func runNotificationSettings(ctx Context, args []string) int {
+	if len(args) == 0 {
+		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/notifications/settings"), nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForNotification(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatNotificationSettings)
+	}
+	switch args[0] {
+	case "set":
+		fs := flag.NewFlagSet("notification settings set", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		freq := fs.String("email-frequency", "", "Bundle email frequency: never|every_few_hours|daily|weekly")
+		if err := fs.Parse(args[1:]); err != nil {
+			return ctx.usageError(helpForNotification(), err)
+		}
+		value := strings.TrimSpace(*freq)
+		if value == "" {
+			return ctx.handleErr(helpForNotification(), UsageError{Msg: "--email-frequency is required"})
+		}
+		if !validEmailFrequencies[value] {
+			return ctx.handleErr(helpForNotification(), UsageError{Msg: "--email-frequency must be one of never, every_few_hours, daily, weekly"})
+		}
+		payload := map[string]any{"user_settings": map[string]any{"bundle_email_frequency": value}}
+		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/notifications/settings"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForNotification(), err)
+		}
+		return outputNoContent(ctx, resp, "Notification settings updated")
 	default:
 		fmt.Fprint(ctx.Stderr, helpForNotification())
 		return 2

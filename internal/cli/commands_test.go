@@ -1725,3 +1725,74 @@ func TestExportDownloadDefaultFilename(t *testing.T) {
 		t.Errorf("fallback filename = %q", got)
 	}
 }
+
+func TestNotificationSettingsShow(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/notifications/settings", stub{Status: 200, Body: `{"bundle_email_frequency":"every_few_hours"}`})
+
+	res := h.run("notification", "settings")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Bundle email frequency: every_few_hours\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/notifications/settings")
+}
+
+func TestNotificationSettingsSet(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/notifications/settings", stub{Status: 204})
+
+	res := h.run("notification", "settings", "set", "--email-frequency", "daily")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Notification settings updated.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/notifications/settings")
+	assertJSONBody(t, rec, map[string]any{"user_settings": map[string]any{"bundle_email_frequency": "daily"}})
+}
+
+func TestNotificationSettingsSetInvalid(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("notification", "settings", "set", "--email-frequency", "hourly")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "must be one of") {
+		t.Errorf("stderr = %q", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestUserSetTimezone(t *testing.T) {
+	h := newHarness(t)
+	h.route("PATCH", "/acme/my/timezone", stub{Status: 204})
+
+	res := h.run("user", "set-timezone", "America/New_York")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Timezone updated.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PATCH", "/acme/my/timezone")
+	assertJSONBody(t, rec, map[string]any{"timezone_name": "America/New_York"})
+}
+
+func TestUserSetTimezoneRequiresArg(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("user", "set-timezone")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}

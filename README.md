@@ -1,10 +1,12 @@
 # fizzy-cli
 
-A fast, human-friendly CLI for the Fizzy kanban board. Manage boards, cards, comments, tags, users, columns, and notifications from your terminal using Fizzy’s HTTP API.
+A fast, human-friendly CLI for the Fizzy kanban board. Manage boards, cards, comments, steps, tags, users, columns, webhooks, exports, and notifications from your terminal using Fizzy's HTTP API.
 
 ## Features
-- Token or magic-link authentication
+- Token or magic-link authentication, plus personal access token management
 - List, create, update, and delete boards/cards/comments/columns/users
+- Card checklists (steps), reactions, pins, tags, activity, and full-text search
+- Board webhooks and account/user data exports
 - Bulk-friendly output with `--json` and `--plain`
 - Config + env precedence for repeatable workflows
 - Works on macOS and Linux (single Go binary)
@@ -55,6 +57,9 @@ fizzy-cli board list
 
 ## Usage Examples
 
+Global flags (`--json`, `--plain`, `--account`, `--token`, etc.) work in any
+position — before or after the subcommand.
+
 List cards on a board:
 
 ```bash
@@ -69,6 +74,14 @@ fizzy-cli card create --board-id 03f5v9zkft4hj9qq0lsn9ohcm \
   --description "Switch theme"
 ```
 
+Create a card with tags:
+
+```bash
+fizzy-cli card create --board-id 03f5v9zkft4hj9qq0lsn9ohcm \
+  --title "Add dark mode" \
+  --tag "frontend" --tag "polish"
+```
+
 Upload a card image:
 
 ```bash
@@ -80,7 +93,13 @@ fizzy-cli card create --board-id 03f5v9zkft4hj9qq0lsn9ohcm \
 Update a card:
 
 ```bash
-fizzy-cli card update 4 --title "Add dark mode (updated)" --tag-id 03f5v9zo9qlcwwpyc0ascnilz
+fizzy-cli card update 4 --title "Add dark mode (updated)" --tag "frontend"
+```
+
+Publish a draft card:
+
+```bash
+fizzy-cli card publish 4
 ```
 
 Comment on a card:
@@ -89,10 +108,60 @@ Comment on a card:
 fizzy-cli comment create 4 --body "Looks good to me"
 ```
 
+Add a checklist step and check it off:
+
+```bash
+fizzy-cli step add 4 --content "Write tests"
+fizzy-cli step check 4 3
+```
+
+React to a card:
+
+```bash
+fizzy-cli reaction add 4 --content "🎉"
+```
+
+List your pinned cards:
+
+```bash
+fizzy-cli pin list
+```
+
+Search across cards:
+
+```bash
+fizzy-cli search "dark mode"
+```
+
+List recent account activity:
+
+```bash
+fizzy-cli activity list --board-id 03f5v9zkft4hj9qq0lsn9ohcm
+```
+
 List notifications (unread only):
 
 ```bash
 fizzy-cli notification list --unread
+```
+
+Create a personal access token:
+
+```bash
+fizzy-cli auth token create --description "CI token" --permission write --save
+```
+
+Manage board webhooks:
+
+```bash
+fizzy-cli webhook create --board-id 03f5v9zkft4hj9qq0lsn9ohcm \
+  --name "CI hook" --url https://example.com/hook --event card_published
+```
+
+Export account data:
+
+```bash
+fizzy-cli export create --wait
 ```
 
 Machine output:
@@ -124,6 +193,19 @@ Inspect config:
 fizzy-cli config show
 ```
 
+## Board Auto-Postpone Limitation
+`board create` and `board update` no longer accept `--auto-postpone-days`.
+The Fizzy backend cannot currently persist a board's auto-postpone period
+via the API (`create` rejects it with a 422; `update` and the entropy
+endpoint accept the value but silently never apply it). Use the
+account-wide setting instead, which does work:
+
+```bash
+fizzy-cli account auto-postpone 30
+```
+
+Valid values are 3, 7, 11, 30, 90, 365.
+
 ## Output Modes
 - Default: human-friendly tables
 - `--plain`: line-oriented output (stable for scripts)
@@ -137,13 +219,20 @@ fizzy-cli config show
 Run `fizzy-cli --help` or `fizzy-cli help <command>`.
 
 Common commands:
-- `auth login|logout|status`
-- `account list|set`
+- `auth login|logout|status|token list|token create|token revoke`
+- `account list|set|get|update|auto-postpone|join-code`
 - `config show|set`
-- `board list|get|create|update|delete`
-- `card list|get|create|update|delete|close|reopen|not-now|triage|untriage|tag|assign|watch|unwatch`
+- `board list|get|create|update|delete|publish|unpublish|accesses|watch|unwatch`
+- `card list|get|create|update|delete|publish|close|reopen|not-now|triage|untriage|tag|assign|watch|unwatch|pin|unpin|move|golden|ungolden|remove-image|read|unread`
 - `comment list|get|create|update|delete`
+- `step list|add|update|check|uncheck|delete`
+- `reaction list|add|remove`
+- `pin list`
 - `tag list`
-- `column list|get|create|update|delete`
-- `user list|get|update|deactivate`
-- `notification list|read|unread|read-all`
+- `column list|get|create|update|delete|cards|move`
+- `user list|get|update|deactivate|set-timezone`
+- `notification list|read|unread|read-all|settings`
+- `activity list`
+- `search <query>`
+- `webhook list|get|create|update|delete|activate|deliveries`
+- `export create|get|download`

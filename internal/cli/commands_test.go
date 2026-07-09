@@ -2,10 +2,15 @@ package cli
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"fizzy-cli/internal/config"
 )
@@ -1554,5 +1559,169 @@ func TestWebhookDeliveriesEmpty(t *testing.T) {
 	}
 	if res.stdout != "" {
 		t.Errorf("stdout = %q, want empty", res.stdout)
+	}
+}
+
+func TestExportCreate(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/account/exports", stub{Status: 201, Body: `{"id":"e1","status":"pending","created_at":"2024-10-01"}`})
+
+	res := h.run("export", "create")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID: e1\nStatus: pending\nCreated: 2024-10-01\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/account/exports")
+}
+
+func TestExportCreateUser(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/users/u9/data_exports", stub{Status: 201, Body: `{"id":"e2","status":"pending","created_at":"2024-10-02"}`})
+
+	res := h.run("export", "create", "--user", "u9")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/users/u9/data_exports")
+}
+
+func TestExportCreateWaitPolls(t *testing.T) {
+	h := newHarness(t)
+	old := exportPollInterval
+	exportPollInterval = time.Millisecond
+	defer func() { exportPollInterval = old }()
+
+	h.route("POST", "/acme/account/exports", stub{Status: 201, Body: `{"id":"e1","status":"pending","created_at":"2024-10-01"}`})
+	var polls int32
+	h.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" && r.URL.Path == "/acme/account/exports/e1" {
+			n := atomic.AddInt32(&polls, 1)
+			h.mu.Lock()
+			h.requests = append(h.requests, recordedRequest{Method: r.Method, Path: r.URL.Path})
+			h.mu.Unlock()
+			w.WriteHeader(200)
+			if n < 2 {
+				_, _ = w.Write([]byte(`{"id":"e1","status":"processing","created_at":"2024-10-01"}`))
+			} else {
+				_, _ = w.Write([]byte(`{"id":"e1","status":"completed","created_at":"2024-10-01","download_url":"http://x/d"}`))
+			}
+			return
+		}
+		h.handle(w, r)
+	})
+
+	res := h.run("export", "create", "--wait", "--timeout", "5s")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if atomic.LoadInt32(&polls) < 2 {
+		t.Errorf("polls = %d, want >= 2", polls)
+	}
+	if !strings.Contains(res.stdout, "Status: completed") || !strings.Contains(res.stdout, "Download URL: http://x/d") {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+}
+
+// A failed export must exit non-zero so scripts don't proceed to download.
+func TestExportCreateWaitFailsNonZero(t *testing.T) {
+	h := newHarness(t)
+	old := exportPollInterval
+	exportPollInterval = time.Millisecond
+	defer func() { exportPollInterval = old }()
+
+	h.route("POST", "/acme/account/exports", stub{Status: 201, Body: `{"id":"e2","status":"pending","created_at":"2024-10-01"}`})
+	h.route("GET", "/acme/account/exports/e2", stub{Status: 200, Body: `{"id":"e2","status":"failed","created_at":"2024-10-01"}`})
+
+	res := h.run("export", "create", "--wait", "--timeout", "5s")
+	if res.code == 0 {
+		t.Fatalf("exit = 0, want non-zero for a failed export; stdout=%q", res.stdout)
+	}
+}
+
+// An invalid --timeout must be rejected before the export is created (no orphan).
+func TestExportCreateInvalidTimeoutNoRequest(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("export", "create", "--wait", "--timeout", "notaduration")
+	if res.code == 0 {
+		t.Fatalf("exit = 0, want non-zero for a bad --timeout")
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls (no orphan export), got %d", h.requestCount())
+	}
+}
+
+func TestExportGet(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/account/exports/e1", stub{Status: 200, Body: `{"id":"e1","status":"completed","created_at":"2024-10-01","download_url":"http://x/d"}`})
+
+	res := h.run("export", "get", "e1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Status: completed") {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/account/exports/e1")
+}
+
+func TestExportDownload(t *testing.T) {
+	h := newHarness(t)
+	zip := "PK\x03\x04zipbytes"
+	h.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/acme/account/exports/e1":
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"id":"e1","status":"completed","created_at":"2024-10-01","download_url":"` + h.server.URL + `/blob/e1"}`))
+		case r.Method == "GET" && r.URL.Path == "/blob/e1":
+			w.Header().Set("Content-Disposition", `attachment; filename="fizzy-export-e1.zip"`)
+			w.Header().Set("Content-Type", "application/zip")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(zip))
+		default:
+			w.WriteHeader(404)
+		}
+	})
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "dl.zip")
+	res := h.run("export", "download", "e1", "-o", out)
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != zip {
+		t.Errorf("downloaded bytes = %q, want %q", data, zip)
+	}
+	if !strings.Contains(res.stdout, out) {
+		t.Errorf("stdout = %q, want path %q", res.stdout, out)
+	}
+}
+
+func TestExportDownloadNotCompleted(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/account/exports/e1", stub{Status: 200, Body: `{"id":"e1","status":"processing","created_at":"2024-10-01"}`})
+
+	res := h.run("export", "download", "e1")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "not ready to download") {
+		t.Errorf("stderr = %q", res.stderr)
+	}
+}
+
+func TestExportDownloadDefaultFilename(t *testing.T) {
+	got := exportDownloadFilename(`attachment; filename="account-export.zip"`, "e1")
+	if got != "account-export.zip" {
+		t.Errorf("filename = %q", got)
+	}
+	if got := exportDownloadFilename("", "e1"); got != "export-e1.zip" {
+		t.Errorf("fallback filename = %q", got)
 	}
 }

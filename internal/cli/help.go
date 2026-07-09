@@ -34,6 +34,7 @@ COMMANDS:
   activity          List account activity
   search            Search cards
   webhook           Manage board webhooks (admin)
+  export            Create and download account/user data exports
   help              Show help for a command
 
 GLOBAL FLAGS:
@@ -285,6 +286,27 @@ NOTES:
 `
 }
 
+func helpForExport() string {
+	return `USAGE:
+  fizzy-cli export create [--user USER_ID] [--wait] [--timeout DURATION]
+  fizzy-cli export get <export-id> [--user USER_ID]
+  fizzy-cli export download <export-id> [--user USER_ID] [-o PATH]
+
+FLAGS:
+  --user USER_ID     Per-user data export (default: whole-account export)
+  --wait             Poll 'create' until the export completes or fails
+  --timeout DUR      Max wait for --wait (default 5m, e.g. 30s, 2m)
+  -o PATH            Output file for 'download' (default: server filename or
+                     export-<id>.zip)
+
+NOTES:
+  Exports process asynchronously (status: pending|processing|completed|
+  failed). 'download' fetches the completed export's authenticated
+  download_url and streams it to disk; it errors if the export is not yet
+  completed.
+`
+}
+
 func helpForCommand(cmd string) string {
 	switch cmd {
 	case "auth":
@@ -319,6 +341,8 @@ func helpForCommand(cmd string) string {
 		return helpForSearch()
 	case "webhook":
 		return helpForWebhook()
+	case "export":
+		return helpForExport()
 	default:
 		return fmt.Sprintf("Unknown command %q.\n\n%s", cmd, rootHelp)
 	}

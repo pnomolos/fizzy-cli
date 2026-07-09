@@ -561,6 +561,53 @@ func runBoard(ctx Context, args []string) int {
 			return ctx.handleErr(helpForBoard(), err)
 		}
 		return outputNoContent(ctx, resp, "Board deleted")
+	case "publish":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+		}
+		resp, err := ctx.Client.Do(requestContext(), "POST", withAccount(ctx, "/boards/"+args[1]+"/publication"), nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForBoard(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatBoard)
+	case "unpublish":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+		}
+		resp, err := ctx.Client.Do(requestContext(), "DELETE", withAccount(ctx, "/boards/"+args[1]+"/publication"), nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForBoard(), err)
+		}
+		return outputNoContent(ctx, resp, "Board unpublished")
+	case "accesses":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+		}
+		resp, err := ctx.Client.Do(requestContext(), "GET", withAccount(ctx, "/boards/"+args[1]+"/accesses"), nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForBoard(), err)
+		}
+		return outputListOrJSON(ctx, resp, boardAccessListHeaders, boardAccessListRows)
+	case "watch":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+		}
+		payload := map[string]any{"involvement": "watching"}
+		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/boards/"+args[1]+"/involvement"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForBoard(), err)
+		}
+		return outputNoContent(ctx, resp, "Now watching board")
+	case "unwatch":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForBoard(), UsageError{Msg: "board id is required"})
+		}
+		payload := map[string]any{"involvement": "access_only"}
+		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/boards/"+args[1]+"/involvement"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForBoard(), err)
+		}
+		return outputNoContent(ctx, resp, "Stopped watching board")
 	default:
 		fmt.Fprint(ctx.Stderr, helpForBoard())
 		return 2

@@ -15,6 +15,7 @@ var (
 	userListHeaders         = []string{"ID", "NAME", "ROLE", "EMAIL"}
 	notificationListHeaders = []string{"ID", "READ", "TITLE", "CARD", "CREATED"}
 	accessTokenListHeaders  = []string{"ID", "DESCRIPTION", "PERMISSION", "CREATED"}
+	stepListHeaders         = []string{"ID", "DONE", "CONTENT"}
 )
 
 type board struct {
@@ -239,6 +240,22 @@ func notificationListRows(body []byte) ([][]string, error) {
 			read = "yes"
 		}
 		rows = append(rows, []string{n.ID, read, n.Title, n.Card.Title, n.CreatedAt})
+	}
+	return rows, nil
+}
+
+func stepListRows(body []byte) ([][]string, error) {
+	var steps []step
+	if err := json.Unmarshal(body, &steps); err != nil {
+		return nil, err
+	}
+	rows := make([][]string, 0, len(steps))
+	for _, s := range steps {
+		done := " "
+		if s.Completed {
+			done = "✓"
+		}
+		rows = append(rows, []string{s.ID, done, s.Content})
 	}
 	return rows, nil
 }

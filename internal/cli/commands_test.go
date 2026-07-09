@@ -598,6 +598,92 @@ func TestAuthTokenCreateInvalidPermission(t *testing.T) {
 	}
 }
 
+const stepsFixture = `[{"id":"s1","content":"Write tests","completed":true},{"id":"s2","content":"Ship it","completed":false}]`
+
+func TestStepList(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/cards/7/steps", stub{Status: 200, Body: stepsFixture})
+
+	res := h.run("step", "list", "7")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "ID  DONE  CONTENT\ns1  ✓     Write tests\ns2        Ship it\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/cards/7/steps")
+}
+
+func TestStepAdd(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/cards/7/steps", stub{Status: 201, Headers: map[string]string{"Location": "/acme/cards/7/steps/s9"}})
+
+	res := h.run("step", "add", "7", "--content", "Do the thing", "--completed")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Step added: /acme/cards/7/steps/s9\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "POST", "/acme/cards/7/steps")
+	assertJSONBody(t, rec, map[string]any{"step": map[string]any{"content": "Do the thing", "completed": true}})
+}
+
+func TestStepUpdate(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/cards/7/steps/s9", stub{Status: 200, Body: `{"id":"s9","content":"Renamed","completed":true}`})
+
+	res := h.run("step", "update", "7", "s9", "--content", "Renamed", "--completed")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Step updated.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	rec := h.lastRequest()
+	assertRequest(t, rec, "PUT", "/acme/cards/7/steps/s9")
+	assertJSONBody(t, rec, map[string]any{"step": map[string]any{"content": "Renamed", "completed": true}})
+}
+
+func TestStepCheckUncheck(t *testing.T) {
+	h := newHarness(t)
+	h.route("PUT", "/acme/cards/7/steps/s9", stub{Status: 200})
+
+	res := h.run("step", "check", "7", "s9")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Step checked.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertJSONBody(t, h.lastRequest(), map[string]any{"step": map[string]any{"completed": true}})
+
+	res = h.run("step", "uncheck", "7", "s9")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Step unchecked.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertJSONBody(t, h.lastRequest(), map[string]any{"step": map[string]any{"completed": false}})
+}
+
+func TestStepDelete(t *testing.T) {
+	h := newHarness(t)
+	h.route("DELETE", "/acme/cards/7/steps/s9", stub{Status: 204})
+
+	res := h.run("step", "delete", "7", "s9")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Step deleted.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "DELETE", "/acme/cards/7/steps/s9")
+}
+
 func TestAuthTokenRevoke(t *testing.T) {
 	h := newHarness(t)
 	h.route("DELETE", "/my/access_tokens/t9", stub{Status: 204})

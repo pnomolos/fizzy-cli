@@ -715,13 +715,26 @@ func runCard(ctx Context, args []string) int {
 		fs := flag.NewFlagSet("card assign", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		assignee := fs.String("assignee-id", "", "Assignee ID")
+		me := fs.Bool("me", false, "Assign the current user")
 		if err := fs.Parse(args[2:]); err != nil {
 			return ctx.usageError(helpForCard(), err)
 		}
-		if strings.TrimSpace(*assignee) == "" {
-			return ctx.handleErr(helpForCard(), UsageError{Msg: "--assignee-id is required"})
+		assigneeVal := strings.TrimSpace(*assignee)
+		if *me && assigneeVal != "" {
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "--me and --assignee-id cannot be used together"})
 		}
-		payload := map[string]any{"assignee_id": strings.TrimSpace(*assignee)}
+		if *me {
+			path := withAccount(ctx, "/cards/"+args[1]+"/self_assignment")
+			resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, nil, "", nil)
+			if err != nil {
+				return ctx.handleErr(helpForCard(), err)
+			}
+			return outputNoContent(ctx, resp, "Self-assignment toggled")
+		}
+		if assigneeVal == "" {
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "--assignee-id or --me is required"})
+		}
+		payload := map[string]any{"assignee_id": assigneeVal}
 		resp, err := ctx.Client.Do(requestContext(), "POST", withAccount(ctx, "/cards/"+args[1]+"/assignments"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
 		if err != nil {
 			return ctx.handleErr(helpForCard(), err)
@@ -735,6 +748,35 @@ func runCard(ctx Context, args []string) int {
 		return simpleCardAction(ctx, helpForCard(), args, "pin", "POST", "/pin", "Card pinned")
 	case "unpin":
 		return simpleCardAction(ctx, helpForCard(), args, "unpin", "DELETE", "/pin", "Card unpinned")
+	case "move":
+		if len(args) < 2 {
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "card number is required"})
+		}
+		fs := flag.NewFlagSet("card move", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardID := fs.String("board-id", "", "Destination board ID")
+		if err := fs.Parse(args[2:]); err != nil {
+			return ctx.usageError(helpForCard(), err)
+		}
+		if strings.TrimSpace(*boardID) == "" {
+			return ctx.handleErr(helpForCard(), UsageError{Msg: "--board-id is required"})
+		}
+		payload := map[string]any{"board_id": strings.TrimSpace(*boardID)}
+		resp, err := ctx.Client.Do(requestContext(), "PUT", withAccount(ctx, "/cards/"+args[1]+"/board"), nil, bytes.NewBuffer(mustJSON(payload)), "application/json", nil)
+		if err != nil {
+			return ctx.handleErr(helpForCard(), err)
+		}
+		return outputJSONOrPretty(ctx, resp.Body, formatCard)
+	case "golden":
+		return simpleCardAction(ctx, helpForCard(), args, "golden", "POST", "/goldness", "Card marked golden")
+	case "ungolden":
+		return simpleCardAction(ctx, helpForCard(), args, "ungolden", "DELETE", "/goldness", "Card unmarked golden")
+	case "remove-image":
+		return simpleCardAction(ctx, helpForCard(), args, "remove-image", "DELETE", "/image", "Card image removed")
+	case "read":
+		return simpleCardAction(ctx, helpForCard(), args, "read", "POST", "/reading", "Card marked read")
+	case "unread":
+		return simpleCardAction(ctx, helpForCard(), args, "unread", "DELETE", "/reading", "Card marked unread")
 	default:
 		fmt.Fprint(ctx.Stderr, helpForCard())
 		return 2

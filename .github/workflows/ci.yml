@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+  integration:
+    name: integration (live Fizzy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build CLI
+        run: go build -o fizzy-cli ./cmd/fizzy-cli
+
+      - name: Start Fizzy
+        run: |
+          docker run -d --name fizzy \
+            -p 3000:80 \
+            -e SECRET_KEY_BASE=$(openssl rand -hex 64) \
+            -e DISABLE_SSL=true \
+            -e BASE_URL=http://localhost:3000 \
+            ghcr.io/basecamp/fizzy:main
+
+      - name: Wait for health
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/up >/dev/null 2>&1; then
+              echo "Fizzy is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Fizzy did not become healthy"; docker logs fizzy; exit 1
+
+      - name: Bootstrap account + token
+        id: bootstrap
+        run: |
+          cat > /tmp/bootstrap.rb <<'RUBY'
+          identity = Identity.find_or_create_by!(email_address: "ci@example.com")
+          account  = Account.first || begin
+            s = Signup.new(identity: identity, full_name: "CI User")
+            s.complete
+            s.account
+          end
+          token = identity.access_tokens.create!(description: "ci", permission: :write)
+          File.write("/rails/tmp/ci-token", token.token)
+          File.write("/rails/tmp/ci-account", account.slug.delete_prefix("/"))
+          RUBY
+          docker cp /tmp/bootstrap.rb fizzy:/rails/tmp/bootstrap.rb
+          docker exec fizzy bin/rails runner /rails/tmp/bootstrap.rb
+          echo "token=$(docker exec fizzy cat /rails/tmp/ci-token)" >> "$GITHUB_OUTPUT"
+          echo "account=$(docker exec fizzy cat /rails/tmp/ci-account)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test
+        env:
+          FIZZY_BASE_URL: http://localhost:3000
+          FIZZY_TOKEN: ${{ steps.bootstrap.outputs.token }}
+          FIZZY_ACCOUNT: ${{ steps.bootstrap.outputs.account }}
+        run: ./script/smoke-test.sh
+
+      - name: Fizzy logs on failure
+        if: failure()
+        run: docker logs fizzy

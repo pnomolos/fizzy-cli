@@ -3,3 +3,6 @@
 
 # Local-only docs
 /docs/
+
+# Built binary
+/fizzy-cli

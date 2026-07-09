@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 )
 
@@ -17,6 +18,7 @@ var (
 	accessTokenListHeaders  = []string{"ID", "DESCRIPTION", "PERMISSION", "CREATED"}
 	stepListHeaders         = []string{"ID", "DONE", "CONTENT"}
 	reactionListHeaders     = []string{"ID", "CONTENT", "REACTER"}
+	activityListHeaders     = []string{"TIME", "ACTION", "DESCRIPTION", "CARD", "BOARD", "CREATOR"}
 )
 
 type board struct {
@@ -152,6 +154,36 @@ type step struct {
 	Completed bool   `json:"completed"`
 }
 
+type activity struct {
+	ID            string          `json:"id"`
+	Action        string          `json:"action"`
+	CreatedAt     string          `json:"created_at"`
+	Description   string          `json:"description"`
+	EventableType string          `json:"eventable_type"`
+	Eventable     json.RawMessage `json:"eventable"`
+	Board         board           `json:"board"`
+	Creator       user            `json:"creator"`
+}
+
+// stripHTML removes HTML tags and unescapes entities, for rendering
+// server-provided description strings that may contain markup in a plain
+// terminal table.
+func stripHTML(s string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			inTag = true
+		case r == '>':
+			inTag = false
+		case !inTag:
+			b.WriteRune(r)
+		}
+	}
+	return strings.TrimSpace(html.UnescapeString(b.String()))
+}
+
 func identityToRows(body []byte) ([][]string, error) {
 	var id identity
 	if err := json.Unmarshal(body, &id); err != nil {
@@ -276,6 +308,27 @@ func reactionListRows(body []byte) ([][]string, error) {
 	rows := make([][]string, 0, len(reactions))
 	for _, r := range reactions {
 		rows = append(rows, []string{r.ID, r.Content, r.Reacter.Name})
+	}
+	return rows, nil
+}
+
+func activityListRows(body []byte) ([][]string, error) {
+	var items []activity
+	if err := json.Unmarshal(body, &items); err != nil {
+		return nil, err
+	}
+	rows := make([][]string, 0, len(items))
+	for _, a := range items {
+		cardNumber := ""
+		if a.EventableType == "Card" && len(a.Eventable) > 0 {
+			var ev struct {
+				Number int `json:"number"`
+			}
+			if err := json.Unmarshal(a.Eventable, &ev); err == nil && ev.Number != 0 {
+				cardNumber = fmt.Sprintf("%d", ev.Number)
+			}
+		}
+		rows = append(rows, []string{a.CreatedAt, a.Action, stripHTML(a.Description), cardNumber, a.Board.Name, a.Creator.Name})
 	}
 	return rows, nil
 }

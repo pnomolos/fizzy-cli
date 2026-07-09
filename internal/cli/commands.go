@@ -1382,6 +1382,39 @@ func outputCreatedID(ctx Context, resp *api.Response, successMessage string) int
 	return 0
 }
 
+func runActivity(ctx Context, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(ctx.Stderr, helpForActivity())
+		return 2
+	}
+	if err := ensureToken(ctx); err != nil {
+		return ctx.handleErr(helpForActivity(), err)
+	}
+	if err := ensureAccount(ctx); err != nil {
+		return ctx.handleErr(helpForActivity(), err)
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("activity list", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardIDs := multiString{}
+		creatorIDs := multiString{}
+		all := fs.Bool("all", false, "Fetch all pages")
+		fs.Var(&boardIDs, "board-id", "Board ID filter")
+		fs.Var(&creatorIDs, "creator-id", "Creator ID filter")
+		if err := fs.Parse(args[1:]); err != nil {
+			return ctx.usageError(helpForActivity(), err)
+		}
+		query := url.Values{}
+		addListParam(query, "board_ids[]", boardIDs.values)
+		addListParam(query, "creator_ids[]", creatorIDs.values)
+		return listWithPagination(ctx, helpForActivity(), withAccount(ctx, "/activities"), query, *all, activityListHeaders, activityListRows)
+	default:
+		fmt.Fprint(ctx.Stderr, helpForActivity())
+		return 2
+	}
+}
+
 func runPin(ctx Context, args []string) int {
 	if len(args) == 0 || args[0] != "list" {
 		fmt.Fprint(ctx.Stderr, helpForPin())

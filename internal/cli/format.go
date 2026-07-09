@@ -55,10 +55,45 @@ type tag struct {
 }
 
 type column struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Color     string `json:"color"`
-	CreatedAt string `json:"created_at"`
+	ID        string      `json:"id"`
+	Name      string      `json:"name"`
+	Color     columnColor `json:"color"`
+	CreatedAt string      `json:"created_at"`
+}
+
+// columnColor tolerates the several shapes the API uses for a column color:
+// null, a bare string, or an object {"name":...,"value":...}.
+type columnColor struct {
+	Name  string
+	Value string
+}
+
+func (c *columnColor) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		c.Name = ""
+		c.Value = ""
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		c.Name = s
+		c.Value = ""
+		return nil
+	}
+	var obj struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	c.Name = obj.Name
+	c.Value = obj.Value
+	return nil
 }
 
 type user struct {
@@ -160,7 +195,7 @@ func columnListRows(body []byte) ([][]string, error) {
 	}
 	rows := make([][]string, 0, len(cols))
 	for _, c := range cols {
-		rows = append(rows, []string{c.ID, c.Name, c.Color})
+		rows = append(rows, []string{c.ID, c.Name, c.Color.Name})
 	}
 	return rows, nil
 }
@@ -262,7 +297,7 @@ func formatColumn(body []byte) (string, error) {
 	}
 	return fmt.Sprintf(
 		"ID: %s\nName: %s\nColor: %s\nCreated: %s",
-		c.ID, c.Name, c.Color, c.CreatedAt,
+		c.ID, c.Name, c.Color.Name, c.CreatedAt,
 	), nil
 }
 

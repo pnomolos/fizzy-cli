@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 )
 
@@ -135,6 +136,49 @@ func TestFormatComment(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("formatComment\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestColumnColorUnmarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"null", `{"id":"c1","name":"Todo","color":null}`, ""},
+		{"string", `{"id":"c1","name":"Todo","color":"Blue"}`, "Blue"},
+		{"object", `{"id":"c1","name":"Todo","color":{"name":"Blue","value":"var(--color-card-default)"}}`, "Blue"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var col column
+			if err := json.Unmarshal([]byte(tc.in), &col); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if col.Color.Name != tc.want {
+				t.Errorf("color name = %q, want %q", col.Color.Name, tc.want)
+			}
+		})
+	}
+}
+
+func TestColumnListRowsGolden(t *testing.T) {
+	body := `[{"id":"c1","name":"Todo","color":{"name":"Blue","value":"var(--color-card-default)"}},{"id":"c2","name":"Done","color":null}]`
+	want := "ID  NAME  COLOR\nc1  Todo  Blue\nc2  Done  \n"
+	if got := renderTable(t, columnListHeaders, columnListRows, body); got != want {
+		t.Errorf("column table mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestFormatColumnObjectColor(t *testing.T) {
+	body := `{"id":"c1","name":"Todo","color":{"name":"Blue","value":"var(--color-card-default)"},"created_at":"2024-01-02"}`
+	want := "ID: c1\nName: Todo\nColor: Blue\nCreated: 2024-01-02"
+	got, err := formatColumn([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("formatColumn\n got: %q\nwant: %q", got, want)
 	}
 }
 

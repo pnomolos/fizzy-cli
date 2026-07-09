@@ -1043,6 +1043,10 @@ func runTag(ctx Context, args []string) int {
 	return outputListOrJSON(ctx, resp, tagListHeaders, tagListRows)
 }
 
+// columnValueFlags are the value-taking flags on column subcommands, so a
+// positional column id can be reordered around them.
+var columnValueFlags = map[string]bool{"board-id": true}
+
 func runColumn(ctx Context, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(ctx.Stderr, helpForColumn())
@@ -1164,6 +1168,58 @@ func runColumn(ctx Context, args []string) int {
 			return ctx.handleErr(helpForColumn(), err)
 		}
 		return outputNoContent(ctx, resp, "Column deleted")
+	case "cards":
+		fs := flag.NewFlagSet("column cards", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardID := fs.String("board-id", "", "Board ID")
+		all := fs.Bool("all", false, "Fetch all pages")
+		// reorderFlagArgs lets the column id sit before or after the flags.
+		if err := fs.Parse(reorderFlagArgs(args[1:], columnValueFlags)); err != nil {
+			return ctx.usageError(helpForColumn(), err)
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
+		}
+		if strings.TrimSpace(*boardID) == "" {
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
+		}
+		path := withAccount(ctx, "/boards/"+strings.TrimSpace(*boardID)+"/columns/"+rest[0]+"/cards")
+		return listWithPagination(ctx, helpForColumn(), path, url.Values{}, *all, cardListHeaders, cardListRows)
+	case "move":
+		fs := flag.NewFlagSet("column move", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		boardID := fs.String("board-id", "", "Board ID")
+		left := fs.Bool("left", false, "Move the column one position left")
+		right := fs.Bool("right", false, "Move the column one position right")
+		if err := fs.Parse(reorderFlagArgs(args[1:], columnValueFlags)); err != nil {
+			return ctx.usageError(helpForColumn(), err)
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "column id is required"})
+		}
+		if strings.TrimSpace(*boardID) == "" {
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--board-id is required"})
+		}
+		if *left && *right {
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--left and --right cannot be used together"})
+		}
+		if !*left && !*right {
+			return ctx.handleErr(helpForColumn(), UsageError{Msg: "--left or --right is required"})
+		}
+		suffix := "/left_position"
+		message := "Column moved left"
+		if *right {
+			suffix = "/right_position"
+			message = "Column moved right"
+		}
+		path := withAccount(ctx, "/columns/"+rest[0]+suffix)
+		resp, err := ctx.Client.Do(requestContext(), "POST", path, nil, nil, "", nil)
+		if err != nil {
+			return ctx.handleErr(helpForColumn(), err)
+		}
+		return outputNoContent(ctx, resp, message)
 	default:
 		fmt.Fprint(ctx.Stderr, helpForColumn())
 		return 2

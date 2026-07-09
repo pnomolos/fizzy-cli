@@ -1277,3 +1277,101 @@ func TestBoardWatchUnwatch(t *testing.T) {
 	assertRequest(t, rec, "PUT", "/acme/boards/b1/involvement")
 	assertJSONBody(t, rec, map[string]any{"involvement": "access_only"})
 }
+
+func TestColumnCards(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/boards/b1/columns/c1/cards", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("column", "cards", "c1", "--board-id", "b1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	want := "#   TITLE       STATUS  BOARD    LAST_ACTIVE\n7   Fix login   open    Bugs     2024-05-06\n12  Add search  closed  Roadmap  2024-05-07\n"
+	if res.stdout != want {
+		t.Errorf("stdout\n got: %q\nwant: %q", res.stdout, want)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/boards/b1/columns/c1/cards")
+}
+
+// The documented order puts the flags before the column id; both orders work.
+func TestColumnCardsFlagsBeforeID(t *testing.T) {
+	h := newHarness(t)
+	h.route("GET", "/acme/boards/b1/columns/c1/cards", stub{Status: 200, Body: cardsFixture})
+
+	res := h.run("column", "cards", "--board-id", "b1", "c1")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "GET", "/acme/boards/b1/columns/c1/cards")
+}
+
+func TestColumnMoveFlagsBeforeID(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/columns/c1/right_position", stub{Status: 201})
+
+	res := h.run("column", "move", "--board-id", "b1", "c1", "--right")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/columns/c1/right_position")
+}
+
+func TestColumnCardsRequiresBoardID(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("column", "cards", "c1")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestColumnMoveLeftRight(t *testing.T) {
+	h := newHarness(t)
+	h.route("POST", "/acme/columns/c1/left_position", stub{Status: 201})
+	h.route("POST", "/acme/columns/c1/right_position", stub{Status: 201})
+
+	res := h.run("column", "move", "c1", "--board-id", "b1", "--left")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Column moved left.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/columns/c1/left_position")
+
+	res = h.run("column", "move", "c1", "--board-id", "b1", "--right")
+	if res.code != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.code, res.stderr)
+	}
+	if res.stdout != "Column moved right.\n" {
+		t.Errorf("stdout = %q", res.stdout)
+	}
+	assertRequest(t, h.lastRequest(), "POST", "/acme/columns/c1/right_position")
+}
+
+func TestColumnMoveRequiresDirection(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("column", "move", "c1", "--board-id", "b1")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
+
+func TestColumnMoveDirectionMutuallyExclusive(t *testing.T) {
+	h := newHarness(t)
+	res := h.run("column", "move", "c1", "--board-id", "b1", "--left", "--right")
+	if res.code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr=%q", res.code, res.stderr)
+	}
+	if !strings.Contains(res.stderr, "cannot be used together") {
+		t.Errorf("stderr = %q, want mutual-exclusion error", res.stderr)
+	}
+	if h.requestCount() != 0 {
+		t.Errorf("expected no HTTP calls, got %d", h.requestCount())
+	}
+}
